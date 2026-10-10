@@ -12,7 +12,7 @@ advances only when a client sends `step`.
 | `tools/generate_solar_system.py` | Regenerates `solar_system.yaml` (J2000 ephemeris) |
 | `test_sim.py` | Tests (`python -m unittest test_sim -v`) |
 | `viz_server.py`, `viz/` | Web 3D viewer of the live state (see below) |
-| `control_server.py`, `control/` | Web control page that sends commands to the sim (see below) |
+| `meo_mission_server.py`, `meo_autopilot.py`, `meo_mission/` | Mission page: fly the Falcon 9 to a medium Earth orbit (see below) |
 
 Requirements: Python 3.9+, `numpy`, `pyyaml`, `pyzmq`.
 
@@ -50,6 +50,9 @@ python sim_client.py step dt=1
 * **Thrust**: a constant force plus a constant `mass_rate` (dm/dt, negative while burning).
   It persists until replaced. When mass reaches `dry_mass`, thrust is cut automatically
   (event `engine_cutoff`).
+* **Sleeping**: a craft resting on a surface with no thrust, still to within 5 cm/s for 2 s,
+  is put to sleep. It is pinned to the rotating surface and no longer integrated, so parked
+  craft cost nothing. `set_thrust` (with nonzero thrust or mass flow) and `set_mass` wake it.
 
 Not modelled: spacecraft-to-spacecraft collisions, body oblateness, lift, attitude.
 
@@ -126,6 +129,7 @@ Vectors are `[x, y, z]` lists.
 | `get_state` | optional `relative_to` (body id); `bodies` / `spacecraft`: `true`, `false` or a list of ids | `bodies`, `spacecraft` |
 | `get_body` | `id`, optional `relative_to` | `body` |
 | `get_spacecraft` | `id`, optional `relative_to` | `spacecraft` |
+| `set_mass` | `id`, `mass` (kg), optional `dry_mass` (kg) | — |
 | `set_thrust` | `id`, `force` (N), `mass_rate` (kg/s, default 0), `frame` (`inertial` \| `enu`), `body` (required for `enu`) | — |
 | `stage` | `id`, `children` (list, ≥ 2), optional default `frame` / `body` | `removed`, `created` |
 | `get_trails` | optional `since` (`{id: [version, seq]}`), `ids` | `trails` (see below) |
@@ -223,40 +227,58 @@ offline.
 * URL parameters: `?focus=<id>` sets the initial focus. `&dist=<km>` sets the initial camera
   distance from that object's centre.
 
-## Control page
+## Mission page: Falcon 9 to medium Earth orbit
 
 ```
-python control_server.py                    # -> open http://127.0.0.1:8081/
+python meo_mission_server.py                # -> open http://127.0.0.1:8081/
 ```
 
-`control_server.py` is a separate process from the viewer. It serves the page in `control/` and
-forwards each JSON command POSTed to `/api/command` to the simulation over ZeroMQ, returning
-the sim's reply unchanged. Commands from all open pages go through one connection, one at a
-time. Options: `--sim <endpoint>`, `--host`, `--port` (8081), `--timeout` (ms; default 120000,
-because long steps can take a while), and `--viewer-url` (where the "Open 3D viewer" link
-points; default: same host, port 8080).
+A page built for one mission. It reads as a questionnaire: perigee and apogee altitude, which
+must lie within MEO (2,000–35,786 km), inclination, payload mass, playback speed, and whether
+to reset the shared simulation first. There are presets for GPS, Galileo and GLONASS. As you
+type, the page validates the answers and shows a rough feasibility estimate: liftoff mass,
+the upper stage's Δv needed against Δv available, the margin, and the largest payload this
+orbit allows.
 
-The page has six sections:
-* **Time**: single steps of any size, with presets from 0.1 s to 1 day. **Run** steps the sim
-  continuously from the browser at a chosen time warp, with a cap on step size, and reports the
-  warp it actually achieves. It can optionally pause on events (engine cutoff, contact). The
-  loop runs in the page, so it stops when the tab closes, and two pages running at once would
-  both step. **Reset** asks for confirmation first.
-* **Spacecraft**: live telemetry for the selected craft.
-* **Thrust**: a *guidance helper* (thrust in kN, pitch above the horizon, heading from north,
-  in the East-North-Up frame of a chosen body, with mass flow from Isp or a direct rate), or a
-  *raw vector* in the ENU or inertial frame. **Cut engine** zeroes thrust and mass flow.
-* **Staging**: two or more children, each with ID, mass, dry mass, Δv (ENU or inertial) and
-  whether to keep the parent's drag table. After staging, the page selects the heaviest child.
-* **Command console**: send any JSON command (Ctrl+Enter), with an examples menu. Every
-  command the page sends is logged with its reply, and events are highlighted.
+**Launch** starts the autopilot (`meo_autopilot.py`) inside the mission server. It flies the
+mission with ordinary sim commands, so it keeps flying if the page is closed, and every open
+page sees the same flight. Only one mission runs at a time. The page shows the phase checklist,
+live telemetry, the flight log, and finally target against achieved orbit. **Abort** shuts the
+engine down immediately.
+
+Flight profile:
+1. **Configure:** `set_mass` sets realistic Falcon 9 Block 5 masses (S1 25.6 t + 395.7 t
+   propellant, S2 3.9 t + 92.7 t, fairing 1.9 t) plus the payload.
+2. **First stage:** vertical rise, a 15° pitch kick at 60 m/s, then a gravity turn along the
+   launch azimuth for the target inclination (corrected for Earth's rotation). The stage burns
+   to depletion. MECO comes at about 78 km, with peak dynamic pressure around 45 kPa.
+3. **Separation:** the first stage and, above 110 km, the fairing are released as separate
+   spacecraft.
+4. **Second-stage ascent:** closed-loop guidance aims for a 200 km perigee in the target plane
+   and burns straight into a transfer orbit whose apogee is the target apogee.
+5. **Apogee:** the stage coasts to apogee, then burns to raise the perigee and trim the
+   inclination.
+6. **Payload separation:** the spent stage backs away, and the result is scored. Success means
+   within max(50 km, 1 %) on both altitudes and within 0.5° on inclination.
+
+Tested targets:
+
+| Orbit | Payload | Result |
+|---|---|---|
+| GPS (20,180 km circular, 55°) | 4,300 kg | within ~1 km and 0.04°, ~880 kg propellant left |
+| Galileo (23,222 km circular, 56°) | 1,500 kg | succeeds, ~3.3 t propellant left |
+| 2,000 × 30,000 km at 30° | 3,000 kg | succeeds |
+| 8,000 km circular at 28.7° (due east) | 4,000 kg | succeeds |
+| 10,000 × 15,000 km at 100° (retrograde) | 2,000 kg | succeeds |
+| GPS orbit | 5,600 kg | fails as the estimate predicts (about 100 m/s short) |
+
+Options: `--sim <endpoint>`, `--host`, `--port` (8081), `--timeout` (ms), `--viewer-url`.
 
 ## Notes and limitations
 
-* Step cost grows with the number of spacecraft substeps. A craft resting on a surface uses
-  ~0.02 s substeps (about 5 ms of wall time per simulated second). A craft in low orbit uses
-  ~4 s substeps. A single very large `dt` with spacecraft present can take a while.
-* Viscous friction cannot hold a craft perfectly still on a rotating body. On Earth it creeps
-  toward the equator at about 3 mm/s, driven by the sideways part of the centrifugal force.
+* Step cost grows with the number of spacecraft substeps. A craft in low orbit uses ~4 s
+  substeps. A craft settling onto a surface uses ~0.02 s substeps until it falls asleep.
+* Viscous friction alone can't hold a craft perfectly still on a rotating body. Sleeping pins
+  it once it is nearly stationary, which stops the slow creep toward the equator.
 * Planet poles and prime meridians come from IAU values. Only Earth's prime meridian is
   tied precisely to a real clock (GMST at J2000).

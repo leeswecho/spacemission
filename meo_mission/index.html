@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Falcon 9 to MEO</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">Mission</p>
+      <h1>Falcon 9 → Medium Earth Orbit</h1>
+    </div>
+    <div class="topbar-right">
+      <span id="sim-status" class="pill pill-wait">Connecting…</span>
+      <a id="viewer-link" class="link" href="#" target="_blank" rel="noopener">Open 3D viewer ↗</a>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- Questionnaire -------------------------------------------------------- -->
+    <section class="card" id="plan">
+      <h2>Plan the mission</h2>
+      <p class="lede">Answer the questions below. The autopilot will launch the Falcon 9 from
+        Cape Canaveral and try to place your payload in that orbit.</p>
+
+      <div class="presets">
+        <span class="muted">Start from a real constellation:</span>
+        <button type="button" data-preset="gps">GPS</button>
+        <button type="button" data-preset="galileo">Galileo</button>
+        <button type="button" data-preset="glonass">GLONASS</button>
+      </div>
+
+      <form id="form" novalidate>
+        <fieldset>
+          <legend><span class="num">1</span> How high should the orbit's <strong>lowest point (perigee)</strong> be?</legend>
+          <div class="answer">
+            <input id="perigee" name="perigee_km" type="number" inputmode="decimal" step="any" value="20180" required>
+            <span class="unit">km above the surface</span>
+          </div>
+          <p class="help">MEO lies between <span id="meo-range"></span>.</p>
+        </fieldset>
+
+        <fieldset>
+          <legend><span class="num">2</span> How high should its <strong>highest point (apogee)</strong> be?</legend>
+          <div class="answer">
+            <input id="apogee" name="apogee_km" type="number" inputmode="decimal" step="any" value="20180" required>
+            <span class="unit">km above the surface</span>
+          </div>
+          <p class="help">Use the same value as the perigee for a circular orbit.</p>
+        </fieldset>
+
+        <fieldset>
+          <legend><span class="num">3</span> What <strong>inclination</strong> should the orbit have?</legend>
+          <div class="answer">
+            <input id="inclination" name="inclination_deg" type="number" inputmode="decimal" step="any" value="55" required>
+            <span class="unit">degrees to the equator</span>
+          </div>
+          <p class="help" id="inc-help"></p>
+        </fieldset>
+
+        <fieldset>
+          <legend><span class="num">4</span> How much <strong>payload</strong> is the Falcon 9 carrying?</legend>
+          <div class="answer">
+            <input id="payload" name="payload_kg" type="number" inputmode="decimal" step="any" value="4300" required>
+            <span class="unit">kg</span>
+          </div>
+          <p class="help">A GPS III satellite weighs about 4,300 kg.</p>
+        </fieldset>
+
+        <fieldset>
+          <legend><span class="num">5</span> How fast should the flight play out?</legend>
+          <div class="choices">
+            <label><input type="radio" name="pace" value="watch" checked>
+              <span><strong>Watchable</strong><small>×5 during burns, ×200 while coasting (about 3 minutes in total)</small></span></label>
+            <label><input type="radio" name="pace" value="fast">
+              <span><strong>Fast</strong><small>×50 during burns, ×2,000 while coasting</small></span></label>
+            <label><input type="radio" name="pace" value="max">
+              <span><strong>As fast as possible</strong><small>Usually a few seconds</small></span></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend><span class="num">6</span> Start from a fresh launch pad?</legend>
+          <label class="check"><input id="reset" type="checkbox" checked>
+            <span>Reset the simulation before launch <small>(clears anything else happening in the shared simulation)</small></span></label>
+        </fieldset>
+
+        <div id="feasibility" class="feasibility" aria-live="polite"></div>
+        <ul id="errors" class="errors" aria-live="polite"></ul>
+
+        <div class="actions">
+          <button id="launch" type="submit" class="primary">Launch mission</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- Flight ---------------------------------------------------------------- -->
+    <section class="card" id="flight">
+      <div class="flight-head">
+        <h2>Flight</h2>
+        <span id="mission-state" class="pill pill-idle">Not launched</span>
+      </div>
+      <div id="result" class="result hidden"></div>
+
+      <ol id="phases" class="phases"></ol>
+
+      <h3>Telemetry <span class="muted small" id="tel-vehicle"></span></h3>
+      <dl id="telemetry" class="telemetry"></dl>
+
+      <div class="actions">
+        <button id="abort" class="danger" disabled>Abort mission</button>
+      </div>
+
+      <h3>Flight log</h3>
+      <ol id="log" class="log"></ol>
+    </section>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

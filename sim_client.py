@@ -83,6 +83,12 @@ class SimClient:
     def set_thrust(self, sc_id, force, mass_rate=0.0, frame="inertial", body=None):
         return self.call("set_thrust", id=sc_id, force=list(force), mass_rate=mass_rate, frame=frame, body=body)
 
+    def set_mass(self, sc_id, mass, dry_mass=None):
+        return self.call("set_mass", id=sc_id, mass=mass, dry_mass=dry_mass)
+
+    def get_trails(self, since=None, ids=None):
+        return self.call("get_trails", since=since, ids=ids)["trails"]
+
     def stage(self, sc_id, children, frame="inertial", body=None):
         return self.call("stage", id=sc_id, children=children, frame=frame, body=body)
 

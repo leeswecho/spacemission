@@ -75,6 +75,10 @@ CONTACT_ZONE = 1.0
 MIN_MASS = 1.0e-6
 # A craft in contact moving slower than this relative to the surface is "resting".
 REST_SPEED = 1.0
+# A resting craft with no thrust that stays this still for SLEEP_AFTER seconds is put to
+# sleep: pinned to the rotating surface and no longer integrated, until commanded again.
+SLEEP_SPEED = 0.05
+SLEEP_AFTER = 2.0
 
 # Trail versions are unique for the life of the process (also across resets), so
 # clients holding an old copy always see a version change.
@@ -122,6 +126,12 @@ def _require(mapping, key, what):
 def _unit(v):
     n = np.linalg.norm(v)
     return v / n if n > 0 else v
+
+
+def _rotate(v, axis, angle):
+    """Rotate vector v about unit vector axis by angle (Rodrigues)."""
+    c, s = math.cos(angle), math.sin(angle)
+    return v * c + np.cross(axis, v) * s + axis * float(np.dot(axis, v)) * (1.0 - c)
 
 
 def _list(v):
@@ -230,6 +240,12 @@ class Body:
         lon = (ang - self.prime_meridian(t) + math.pi) % (2.0 * math.pi) - math.pi
         return math.degrees(lat), math.degrees(lon)
 
+    def to_body_fixed(self, rel, t):
+        return _rotate(rel, self.pole, -self.spin_rate * t)
+
+    def from_body_fixed(self, rel_fixed, t):
+        return _rotate(rel_fixed, self.pole, self.spin_rate * t)
+
     def enu_basis(self, rel_pos):
         """East, North, Up unit vectors at a position relative to the body centre."""
         up = _unit(rel_pos)
@@ -263,7 +279,13 @@ class Spacecraft:
         self.contact = contact  # optional per-craft override (dict of partial values)
         self.in_contact = set()
         self.trail = Trail()
+        self.sleep = None       # (body index, position in body-fixed axes) while asleep
+        self.still_time = 0.0   # time spent resting motionless with no thrust
         self.clear_thrust()
+
+    def wake(self):
+        self.sleep = None
+        self.still_time = 0.0
 
     def clear_thrust(self):
         self.thrust = np.zeros(3)
@@ -609,6 +631,9 @@ class Simulation:
         t = t0
         t_end = t0 + dt
         while t_end - t > 1e-12 * max(1.0, abs(t_end)):
+            if sc.sleep is not None:
+                self._advance_sleeping(sc, traj, t_end)
+                return
             P0, V0 = traj.at(t)
             h = self._choose_substep(sc, t, P0, V0, t_end - t)
 
@@ -643,6 +668,30 @@ class Simulation:
                 self._engine_cutoff(sc, t, events)
             self._update_contact(sc, t, P1, events)
             self._record_trail(sc, t, P1, V1, force=cutoff)
+            self._check_sleep(sc, t, h, P1, V1)
+
+    def _check_sleep(self, sc, t, h, P, V):
+        """Put a craft to sleep once it has rested motionless with no thrust for SLEEP_AFTER s."""
+        if sc.thrust_active or not sc.in_contact:
+            sc.still_time = 0.0
+            return
+        i = self.body_by_id[sorted(sc.in_contact)[0]].index
+        body = self.bodies[i]
+        rel = sc.pos - P[i]
+        if np.linalg.norm(sc.vel - (V[i] + np.cross(body.omega_vec, rel))) >= SLEEP_SPEED:
+            sc.still_time = 0.0
+            return
+        sc.still_time += h
+        if sc.still_time >= SLEEP_AFTER:
+            sc.sleep = (i, body.to_body_fixed(rel, t))
+
+    def _advance_sleeping(self, sc, traj, t_end):
+        i, rel_fixed = sc.sleep
+        body = self.bodies[i]
+        P, V = traj.at(t_end)
+        rel = body.from_body_fixed(rel_fixed, t_end)
+        sc.pos = P[i] + rel
+        sc.vel = V[i] + np.cross(body.omega_vec, rel)
 
     def _engine_cutoff(self, sc, t, events):
         sc.clear_thrust()
@@ -770,6 +819,18 @@ class Simulation:
         sc.mass_rate = mass_rate
         sc.thrust_frame = frame
         sc.thrust_body = body_obj
+        if sc.thrust_active:
+            sc.wake()
+
+    def set_mass(self, sc_id, mass, dry_mass=None):
+        sc = self._craft(sc_id)
+        mass = _number(mass, "mass", positive=True)
+        dry = sc.dry_mass if dry_mass is None else _number(dry_mass, "dry_mass", nonnegative=True)
+        if dry > mass:
+            raise SimError(f"dry_mass ({dry}) exceeds mass ({mass})")
+        sc.mass = mass
+        sc.dry_mass = dry
+        sc.wake()
 
     def _parse_frame(self, frame, body):
         frame = str(frame or "inertial").lower()
@@ -871,6 +932,7 @@ class Simulation:
                 "latitude": lat,
                 "longitude": lon,
                 "in_contact": bool(alt[i] < 0.0),
+                "sleeping": sc.sleep is not None,
                 "surface_relative_velocity": _list(v_rel),
                 "surface_relative_velocity_enu": [float(np.dot(v_rel, e)) for e in (east, north, up)],
                 "airspeed": airspeed,
@@ -966,6 +1028,11 @@ class CommandHandler:
         new_ids = self.sim.stage(_require(req, "id", "stage"), _require(req, "children", "stage"),
                                  req.get("frame", "inertial"), req.get("body"))
         return {"removed": req["id"], "created": new_ids}
+
+    def cmd_set_mass(self, req):
+        sc_id = _require(req, "id", "set_mass")
+        self.sim.set_mass(sc_id, _require(req, "mass", "set_mass"), req.get("dry_mass"))
+        return {"spacecraft": sc_id}
 
     def cmd_get_trails(self, req):
         return {"trails": self.sim.trails(req.get("since"), req.get("ids"))}

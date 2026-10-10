@@ -309,17 +309,107 @@ class IpcTest(unittest.TestCase):
                 proc.kill()
 
 
-class ControlServerTest(unittest.TestCase):
-    SIM = "tcp://127.0.0.1:5598"
-    PORT = 8097
+class SleepAndMassTest(unittest.TestCase):
+    def test_parked_craft_sleeps_and_wakes(self):
+        sim = Simulation(SCENARIO)
+        sc = sim.spacecraft["falcon9"]
+        sim.step(5.0)
+        self.assertIsNotNone(sc.sleep)
+        before = sim.spacecraft_state("falcon9")["nearest_body"]
+        t0 = time.perf_counter()
+        sim.step(6 * 3600.0)
+        self.assertLess(time.perf_counter() - t0, 1.0)  # no contact integration while asleep
+        after = sim.spacecraft_state("falcon9")["nearest_body"]
+        self.assertAlmostEqual(after["latitude"], before["latitude"], places=6)
+        self.assertAlmostEqual(after["longitude"], before["longitude"], places=6)
+        self.assertLess(after["airspeed"], 1e-6)
+        self.assertTrue(after["sleeping"])
+        sim.set_thrust("falcon9", [0, 0, 7.607e6], -2750.0, "enu", "earth")
+        self.assertIsNone(sc.sleep)
+        sim.step(10.0)
+        self.assertGreater(sim.spacecraft_state("falcon9")["nearest_body"]["altitude"], 100.0)
 
-    def post(self, payload, raw=None):
+    def test_set_mass(self):
+        sim = Simulation(SCENARIO)
+        sim.set_mass("falcon9", 500000.0, 120000.0)
+        sc = sim.spacecraft["falcon9"]
+        self.assertEqual((sc.mass, sc.dry_mass), (500000.0, 120000.0))
+        sim.set_mass("falcon9", 400000.0)
+        self.assertEqual((sc.mass, sc.dry_mass), (400000.0, 120000.0))
+        with self.assertRaises(SimError):
+            sim.set_mass("falcon9", 1000.0, 2000.0)
+        with self.assertRaises(SimError):
+            sim.set_mass("falcon9", -5.0)
+
+
+class MeoAutopilotTest(unittest.TestCase):
+    def test_validation(self):
+        import meo_autopilot as ap
+        ok = {"perigee_km": 20180, "apogee_km": 20180, "inclination_deg": 55, "payload_kg": 4300, "pace": "max"}
+        params, errors, est = ap.validate(ok)
+        self.assertEqual(errors, [])
+        self.assertGreater(est["margin"], 0)
+        self.assertTrue(5000 < est["max_payload"] < 5600)
+        for bad in ({"perigee_km": 500}, {"apogee_km": 40000}, {"perigee_km": 25000},
+                    {"inclination_deg": 20}, {"payload_kg": -1}, {"payload_kg": "lots"}, {"pace": "warp"}):
+            _, errors, est = ap.validate({**ok, **bad})
+            self.assertTrue(errors, bad)
+            self.assertIsNone(est)
+
+    def test_orbital_helpers(self):
+        import meo_autopilot as ap
+        mu, r0 = ap.EARTH_MU, ap.EARTH_RADIUS + 20180e3
+        pole = np.array([0.0, 0.0, 1.0])
+        i = math.radians(55)
+        v = math.sqrt(mu / r0)
+        el = ap.elements(np.array([r0, 0, 0]), np.array([0, v * math.cos(i), v * math.sin(i)]), mu, pole)
+        self.assertAlmostEqual(el["inc"], 55.0, places=6)
+        self.assertAlmostEqual(el["r_p"], r0, delta=1.0)
+        self.assertAlmostEqual(el["r_a"], r0, delta=1.0)
+        # From perigee of a transfer orbit, apoapsis is half a period away.
+        r_p, r_a = ap.EARTH_RADIUS + 200e3, r0
+        a = (r_p + r_a) / 2
+        vp = math.sqrt(mu * (2 / r_p - 1 / a))
+        t_apo = ap.time_to_apoapsis(np.array([r_p, 0, 0]), np.array([0, vp, 0]), mu)
+        self.assertAlmostEqual(t_apo, math.pi * math.sqrt(a**3 / mu), delta=1.0)
+
+    def test_gps_mission(self):
+        import meo_autopilot as ap
+        from sim_client import SimClient
+
+        endpoint = "tcp://127.0.0.1:5596"
+        sim = subprocess.Popen([sys.executable, str(HERE / "nbody_sim.py"), str(SCENARIO), "--endpoint", endpoint])
+        try:
+            params, errors, est = ap.validate({"perigee_km": 20180, "apogee_km": 20180, "inclination_deg": 55,
+                                               "payload_kg": 4300, "pace": "max", "reset": True})
+            self.assertEqual(errors, [])
+            status = ap.MissionStatus()
+            status.begin(params, est)
+            ap.MeoMission(SimClient(endpoint, timeout_ms=60000), params, status).run()
+            snap = status.snapshot()
+            self.assertEqual(snap["state"], "succeeded", snap["message"])
+            self.assertTrue(all(p["state"] == "done" for p in snap["phases"]))
+            r = snap["result"]
+            self.assertEqual(r["craft"], "payload")
+            self.assertLess(abs(r["errors"]["perigee_km"]), 50)
+            self.assertLess(abs(r["errors"]["apogee_km"]), 50)
+            self.assertLess(abs(r["errors"]["inclination_deg"]), 0.5)
+        finally:
+            sim.kill()
+            sim.wait(timeout=10)
+
+
+class MissionServerTest(unittest.TestCase):
+    SIM = "tcp://127.0.0.1:5597"
+    PORT = 8098
+
+    def request(self, path, payload=None):
         import json
         import urllib.error
         import urllib.request
 
-        data = raw if raw is not None else json.dumps(payload).encode()
-        req = urllib.request.Request(f"http://127.0.0.1:{self.PORT}/api/command", data=data,
+        data = None if payload is None else json.dumps(payload).encode()
+        req = urllib.request.Request(f"http://127.0.0.1:{self.PORT}{path}", data=data,
                                      headers={"Content-Type": "application/json"})
         try:
             with urllib.request.urlopen(req, timeout=10) as res:
@@ -327,40 +417,48 @@ class ControlServerTest(unittest.TestCase):
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read())
 
-    def test_forwards_commands(self):
+    def test_page_validate_start_abort(self):
         import urllib.request
 
         sim = subprocess.Popen([sys.executable, str(HERE / "nbody_sim.py"), str(SCENARIO), "--endpoint", self.SIM])
-        ctl = subprocess.Popen([sys.executable, str(HERE / "control_server.py"), "--sim", self.SIM,
-                                "--port", str(self.PORT), "--timeout", "5000"])
+        srv = subprocess.Popen([sys.executable, str(HERE / "meo_mission_server.py"), "--sim", self.SIM,
+                                "--port", str(self.PORT)])
         try:
-            for _ in range(50):  # wait for the HTTP server to come up
+            for _ in range(50):
                 try:
                     urllib.request.urlopen(f"http://127.0.0.1:{self.PORT}/api/config", timeout=1)
                     break
                 except OSError:
                     time.sleep(0.1)
             with urllib.request.urlopen(f"http://127.0.0.1:{self.PORT}/", timeout=5) as res:
-                self.assertIn(b"Mission Control", res.read())
+                self.assertIn(b"Medium Earth Orbit", res.read())
 
-            status, reply = self.post({"cmd": "set_thrust", "id": "falcon9", "force": [0, 0, 7.607e6],
-                                       "mass_rate": -2750, "frame": "enu", "body": "earth"})
-            self.assertEqual((status, reply["ok"]), (200, True))
-            status, reply = self.post({"cmd": "step", "dt": 2.0, "return_state": True})
+            good = {"perigee_km": 20180, "apogee_km": 20180, "inclination_deg": 55, "payload_kg": 4300,
+                    "pace": "watch", "reset": True}
+            status, reply = self.request("/api/validate", good)
             self.assertTrue(reply["ok"])
-            self.assertAlmostEqual(reply["time"], 2.0)
-            self.assertEqual(reply["state"]["spacecraft"][0]["id"], "falcon9")
+            self.assertIn("margin", reply["estimate"])
+            status, reply = self.request("/api/start", {**good, "inclination_deg": 10})
+            self.assertEqual(status, 400)
 
-            status, reply = self.post({"cmd": "bogus"})
-            self.assertEqual(status, 200)
-            self.assertFalse(reply["ok"])
-            self.assertIn("unknown command", reply["error"])
-            status, reply = self.post(None, raw=b"not json")
-            self.assertEqual(status, 400)
-            status, reply = self.post([1, 2])
-            self.assertEqual(status, 400)
+            status, reply = self.request("/api/start", good)
+            self.assertEqual((status, reply["ok"]), (200, True))
+            status, reply = self.request("/api/start", good)
+            self.assertEqual(status, 409)  # one mission at a time
+            time.sleep(2.0)
+            status, snap = self.request("/api/mission")
+            self.assertEqual(snap["state"], "running")
+            self.assertTrue(snap["sim"]["connected"])
+            status, reply = self.request("/api/abort", {})
+            self.assertTrue(reply["ok"])
+            for _ in range(50):
+                status, snap = self.request("/api/mission")
+                if snap["state"] != "running":
+                    break
+                time.sleep(0.2)
+            self.assertEqual(snap["state"], "aborted")
         finally:
-            for p in (ctl, sim):
+            for p in (srv, sim):
                 p.kill()
                 p.wait(timeout=10)
 

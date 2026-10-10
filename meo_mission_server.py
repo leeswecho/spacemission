@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+"""Mission page: fly the Falcon 9 into a medium Earth orbit.
+
+Serves a questionnaire page (./meo_mission) where the operator picks the
+target perigee, apogee, inclination and payload mass.  On launch, the
+autopilot in meo_autopilot.py flies the mission server-side by sending
+commands to the simulation over ZeroMQ; the page shows its progress.  One
+mission runs at a time; every open page sees the same mission.
+
+Run:  python meo_mission_server.py [--sim tcp://127.0.0.1:5555] [--port 8081]
+Then open http://127.0.0.1:8081/
+"""
+
+import argparse
+import functools
+import json
+import threading
+import time
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+import meo_autopilot as ap
+from sim_client import DEFAULT_ENDPOINT, SimClient, SimCommandError
+
+PAGE_DIR = Path(__file__).resolve().parent / "meo_mission"
+MAX_BODY = 64 * 1024
+
+
+class MissionControl:
+    """Owns the mission status and the autopilot thread."""
+
+    def __init__(self, endpoint, timeout_ms):
+        self.endpoint = endpoint
+        self.timeout_ms = timeout_ms
+        self.status = ap.MissionStatus()
+        self.thread = None
+        self.start_lock = threading.Lock()
+        # Separate connection for health checks so they never wait behind the autopilot.
+        self.ping_client = SimClient(endpoint, timeout_ms=2000)
+        self.ping_lock = threading.Lock()
+        self.ping_cache = (0.0, None)
+
+    def sim_status(self):
+        now = time.monotonic()
+        with self.ping_lock:
+            if now - self.ping_cache[0] > 2.0:
+                try:
+                    reply = self.ping_client.ping()
+                    self.ping_cache = (now, {"connected": True, "time": reply["time"]})
+                except (TimeoutError, SimCommandError) as e:
+                    self.ping_cache = (now, {"connected": False, "error": str(e)})
+            return self.ping_cache[1]
+
+    def start(self, raw):
+        params, errors, est = ap.validate(raw)
+        if errors:
+            return 400, {"ok": False, "errors": errors}
+        with self.start_lock:
+            if self.thread and self.thread.is_alive():
+                return 409, {"ok": False, "errors": ["A mission is already in flight."]}
+            self.status.begin(params, est)
+            mission = ap.MeoMission(SimClient(self.endpoint, timeout_ms=self.timeout_ms), params, self.status)
+            self.thread = threading.Thread(target=mission.run, name="meo-autopilot", daemon=True)
+            self.thread.start()
+        return 200, {"ok": True}
+
+    def abort(self):
+        return self.status.request_abort()
+
+
+class Handler(SimpleHTTPRequestHandler):
+    # Windows can map .js to text/plain via the registry, which breaks ES modules.
+    extensions_map = {**SimpleHTTPRequestHandler.extensions_map,
+                      ".js": "text/javascript", ".mjs": "text/javascript"}
+
+    def __init__(self, *args, control=None, config=None, **kwargs):
+        self.control = control
+        self.config = config
+        super().__init__(*args, directory=str(PAGE_DIR), **kwargs)
+
+    def _json(self, status, obj):
+        body = json.dumps(obj).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _body(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            return None
+        if length < 0 or length > MAX_BODY:
+            return None
+        if length == 0:
+            return {}
+        try:
+            data = json.loads(self.rfile.read(length))
+        except json.JSONDecodeError:
+            return None
+        return data if isinstance(data, dict) else None
+
+    def do_GET(self):
+        path = self.path.split("?", 1)[0]
+        if path == "/api/config":
+            self._json(200, self.config)
+        elif path == "/api/mission":
+            snap = self.control.status.snapshot()
+            snap["sim"] = self.control.sim_status()
+            self._json(200, snap)
+        else:
+            super().do_GET()
+
+    def do_POST(self):
+        path = self.path.split("?", 1)[0]
+        body = self._body()
+        if body is None:
+            self._json(400, {"ok": False, "errors": ["Request body must be a JSON object."]})
+        elif path == "/api/validate":
+            params, errors, est = ap.validate(body)
+            self._json(200, {"ok": not errors, "errors": errors, "estimate": est})
+        elif path == "/api/start":
+            status, reply = self.control.start(body)
+            self._json(status, reply)
+        elif path == "/api/abort":
+            self._json(200, {"ok": self.control.abort()})
+        else:
+            self._json(404, {"ok": False, "errors": ["Not found."]})
+
+    def end_headers(self):
+        if not self.path.startswith("/api/"):
+            self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
+
+    def log_message(self, fmt, *args):
+        pass  # the page polls continuously; keep the console quiet
+
+
+def page_config(viewer_url):
+    return {
+        "viewer_url": viewer_url,
+        "launch_latitude": ap.LAUNCH_LATITUDE,
+        "meo_min_km": ap.MEO_MIN_ALT / 1e3,
+        "meo_max_km": ap.MEO_MAX_ALT / 1e3,
+        "max_payload_kg": ap.MAX_PAYLOAD,
+        "paces": {k: {"powered": v[0], "coast": v[1]} for k, v in ap.PACES.items()},
+        "phases": [{"key": k, "title": t} for k, t in ap.PHASES],
+        "vehicle": ap.VEHICLE,
+    }
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Serve the Falcon 9 to MEO mission page.")
+    parser.add_argument("--sim", default=DEFAULT_ENDPOINT, help=f"simulation endpoint (default {DEFAULT_ENDPOINT})")
+    parser.add_argument("--host", default="127.0.0.1", help="HTTP bind address (default 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=8081, help="HTTP port (default 8081)")
+    parser.add_argument("--timeout", type=int, default=120000, help="simulation reply timeout in ms (default 120000)")
+    parser.add_argument("--viewer-url", default=None,
+                        help="URL of the 3D viewer to link to (default: same host, port 8080)")
+    args = parser.parse_args(argv)
+
+    control = MissionControl(args.sim, args.timeout)
+    server = ThreadingHTTPServer((args.host, args.port),
+                                 functools.partial(Handler, control=control, config=page_config(args.viewer_url)))
+    print(f"[meo_mission] simulation at {args.sim}", flush=True)
+    print(f"[meo_mission] open http://{args.host}:{args.port}/", flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        control.abort()
+        server.server_close()
+        print("[meo_mission] stopped", flush=True)
+
+
+if __name__ == "__main__":
+    main()
