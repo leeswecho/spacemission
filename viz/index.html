@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Solar System Viewer</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three/three.module.js",
+        "three/addons/": "./vendor/three/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+  <div id="labels"></div>
+
+  <header id="hud">
+    <div class="hud-row">
+      <span id="status" class="status status-wait">Connecting…</span>
+      <span id="sim-time" class="mono">t = —</span>
+    </div>
+    <div id="sim-date" class="mono muted">—</div>
+    <div class="mono muted">Focus: <span id="focus-name">—</span> · Range <span id="cam-range">—</span></div>
+  </header>
+
+  <aside id="panel">
+    <button id="panel-toggle" aria-expanded="true" title="Hide panel">Objects ▾</button>
+    <div id="panel-body">
+      <h2>Bodies</h2>
+      <ul id="body-list" class="obj-list"></ul>
+      <h2>Spacecraft</h2>
+      <ul id="craft-list" class="obj-list"></ul>
+      <h2 id="details-title">Details</h2>
+      <dl id="details"></dl>
+      <p class="hint">Drag to orbit · wheel or +/- to zoom · click a name to focus · F refocuses</p>
+    </div>
+  </aside>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
