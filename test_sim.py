@@ -233,5 +233,61 @@ class IpcTest(unittest.TestCase):
                 proc.kill()
 
 
+class ControlServerTest(unittest.TestCase):
+    SIM = "tcp://127.0.0.1:5598"
+    PORT = 8097
+
+    def post(self, payload, raw=None):
+        import json
+        import urllib.error
+        import urllib.request
+
+        data = raw if raw is not None else json.dumps(payload).encode()
+        req = urllib.request.Request(f"http://127.0.0.1:{self.PORT}/api/command", data=data,
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as res:
+                return res.status, json.loads(res.read())
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read())
+
+    def test_forwards_commands(self):
+        import urllib.request
+
+        sim = subprocess.Popen([sys.executable, str(HERE / "nbody_sim.py"), str(SCENARIO), "--endpoint", self.SIM])
+        ctl = subprocess.Popen([sys.executable, str(HERE / "control_server.py"), "--sim", self.SIM,
+                                "--port", str(self.PORT), "--timeout", "5000"])
+        try:
+            for _ in range(50):  # wait for the HTTP server to come up
+                try:
+                    urllib.request.urlopen(f"http://127.0.0.1:{self.PORT}/api/config", timeout=1)
+                    break
+                except OSError:
+                    time.sleep(0.1)
+            with urllib.request.urlopen(f"http://127.0.0.1:{self.PORT}/", timeout=5) as res:
+                self.assertIn(b"Mission Control", res.read())
+
+            status, reply = self.post({"cmd": "set_thrust", "id": "falcon9", "force": [0, 0, 7.607e6],
+                                       "mass_rate": -2750, "frame": "enu", "body": "earth"})
+            self.assertEqual((status, reply["ok"]), (200, True))
+            status, reply = self.post({"cmd": "step", "dt": 2.0, "return_state": True})
+            self.assertTrue(reply["ok"])
+            self.assertAlmostEqual(reply["time"], 2.0)
+            self.assertEqual(reply["state"]["spacecraft"][0]["id"], "falcon9")
+
+            status, reply = self.post({"cmd": "bogus"})
+            self.assertEqual(status, 200)
+            self.assertFalse(reply["ok"])
+            self.assertIn("unknown command", reply["error"])
+            status, reply = self.post(None, raw=b"not json")
+            self.assertEqual(status, 400)
+            status, reply = self.post([1, 2])
+            self.assertEqual(status, 400)
+        finally:
+            for p in (ctl, sim):
+                p.kill()
+                p.wait(timeout=10)
+
+
 if __name__ == "__main__":
     unittest.main()

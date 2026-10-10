@@ -12,6 +12,7 @@ advances only when a client sends `step`.
 | `tools/generate_solar_system.py` | Regenerates `solar_system.yaml` (J2000 ephemeris) |
 | `test_sim.py` | Tests (`python -m unittest test_sim -v`) |
 | `viz_server.py`, `viz/` | Web 3D viewer of the live state (see below) |
+| `control_server.py`, `control/` | Web control page that sends commands to the sim (see below) |
 
 Requirements: Python 3.9+, `numpy`, `pyyaml`, `pyzmq`.
 
@@ -191,6 +192,34 @@ offline.
     object. The ring is parallel to the ecliptic, with a ♈ spoke and an "ecliptic N" axis.
 * URL parameters: `?focus=<id>` sets the initial focus. `&dist=<km>` sets the initial camera
   distance from that object's centre.
+
+## Control page
+
+```
+python control_server.py                    # -> open http://127.0.0.1:8081/
+```
+
+`control_server.py` is a separate process from the viewer. It serves the page in `control/` and
+forwards each JSON command POSTed to `/api/command` to the simulation over ZeroMQ, returning
+the sim's reply unchanged. Commands from all open pages go through one connection, one at a
+time. Options: `--sim <endpoint>`, `--host`, `--port` (8081), `--timeout` (ms; default 120000,
+because long steps can take a while), and `--viewer-url` (where the "Open 3D viewer" link
+points; default: same host, port 8080).
+
+The page has six sections:
+* **Time**: single steps of any size, with presets from 0.1 s to 1 day. **Run** steps the sim
+  continuously from the browser at a chosen time warp, with a cap on step size, and reports the
+  warp it actually achieves. It can optionally pause on events (engine cutoff, contact). The
+  loop runs in the page, so it stops when the tab closes, and two pages running at once would
+  both step. **Reset** asks for confirmation first.
+* **Spacecraft**: live telemetry for the selected craft.
+* **Thrust**: a *guidance helper* (thrust in kN, pitch above the horizon, heading from north,
+  in the East-North-Up frame of a chosen body, with mass flow from Isp or a direct rate), or a
+  *raw vector* in the ENU or inertial frame. **Cut engine** zeroes thrust and mass flow.
+* **Staging**: two or more children, each with ID, mass, dry mass, Δv (ENU or inertial) and
+  whether to keep the parent's drag table. After staging, the page selects the heaviest child.
+* **Command console**: send any JSON command (Ctrl+Enter), with an examples menu. Every
+  command the page sends is logged with its reply, and events are highlighted.
 
 ## Notes and limitations
 
