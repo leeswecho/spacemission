@@ -391,6 +391,8 @@ class MeoAutopilotTest(unittest.TestCase):
             self.assertTrue(all(p["state"] == "done" for p in snap["phases"]))
             r = snap["result"]
             self.assertEqual(r["craft"], "payload")
+            ids = SimClient(endpoint, timeout_ms=5000).info()["spacecraft"]
+            self.assertEqual(sorted(ids), ["fairing", "falcon9", "falcon9_s1", "payload"])
             self.assertLess(abs(r["errors"]["perigee_km"]), 50)
             self.assertLess(abs(r["errors"]["apogee_km"]), 50)
             self.assertLess(abs(r["errors"]["inclination_deg"]), 0.5)

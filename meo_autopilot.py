@@ -48,7 +48,7 @@ VEHICLE = {
 
 VEHICLE_ID = "falcon9"
 S1_ID = "falcon9_s1"
-S2_ID = "falcon9_s2"
+S2_ID = VEHICLE_ID           # the upper stage keeps the vehicle's ID through every separation
 FAIRING_ID = "fairing"
 PAYLOAD_ID = "payload"
 
