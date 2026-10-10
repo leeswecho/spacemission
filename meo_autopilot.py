@@ -68,6 +68,7 @@ S2_ASCENT_DV = 4_700.0       # m/s, 2nd-stage delta-v to reach the parking altit
 # Pacing presets: (powered-flight warp, coasting warp); None = as fast as possible.
 PACES = {
     "watch": (5.0, 200.0),
+    "x5": (5.0, 5.0),          # constant ×5 throughout, coasts included
     "fast": (50.0, 2_000.0),
     "max": (None, None),
 }
