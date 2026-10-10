@@ -149,7 +149,7 @@ def main(argv=None):
     parser.add_argument("--sim", default=DEFAULT_ENDPOINT, help=f"simulation endpoint (default {DEFAULT_ENDPOINT})")
     parser.add_argument("--host", default="127.0.0.1", help="HTTP bind address (default 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8080, help="HTTP port (default 8080)")
-    parser.add_argument("--rate", type=float, default=4.0, help="simulation polls per second (default 4)")
+    parser.add_argument("--rate", type=float, default=10.0, help="simulation polls per second (default 10)")
     parser.add_argument("--timeout", type=int, default=2000, help="simulation reply timeout, ms (default 2000)")
     args = parser.parse_args(argv)
 

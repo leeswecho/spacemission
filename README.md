@@ -198,11 +198,12 @@ python nbody_sim.py solar_system.yaml       # terminal 1
 python viz_server.py                        # terminal 2 -> open http://127.0.0.1:8080/
 ```
 
-`viz_server.py` is just another ZeroMQ client: it polls `get_state` (default 4 Hz) and serves
+`viz_server.py` is just another ZeroMQ client: it polls `get_state` (default 10 Hz) and serves
 the latest state at `/api/state` plus the static page in `viz/`. It never steps the simulation,
 so any controller can drive the sim while the page updates live. Options: `--sim <endpoint>`,
 `--host`, `--port` (8080), `--rate` (polls/s), `--timeout` (ms). If the sim stops responding,
-the page keeps showing the last state and marks it as stale.
+the page keeps showing the last state and marks it as stale. The page polls every 200 ms
+(about 5 updates per second).
 
 The page uses Three.js r160, stored in `viz/vendor/three/` (MIT licence), so it works
 offline.

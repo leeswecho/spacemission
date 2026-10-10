@@ -14,7 +14,7 @@ import { TrailRenderer } from './trails.js';
 
 const KM = 1000;
 const AU = 1.495978707e11;
-const POLL_MS = 500;
+const POLL_MS = 200;        // target ~5 updates/s (measured from the start of each poll)
 const NEAR = 1e-5;          // km
 const FAR = 1e12;           // km
 const LOG_DEPTH_FC = 2.0 / Math.log2(FAR + 1.0);
@@ -547,6 +547,7 @@ async function fetchTrails() {
 }
 
 async function poll() {
+  const started = performance.now();
   try {
     const [res, trailUpdate] = await Promise.all([fetch('/api/state', { cache: 'no-store' }), fetchTrails()]);
     const doc = await res.json();
@@ -557,7 +558,8 @@ async function poll() {
   } catch (err) {
     setStatus('bad', 'Viz server unreachable');
   }
-  setTimeout(poll, POLL_MS);
+  // Network time counts toward the interval; a slow reply just delays the next poll.
+  setTimeout(poll, Math.max(0, POLL_MS - (performance.now() - started)));
 }
 
 function applyState(state) {
