@@ -17,6 +17,7 @@ import threading
 import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs
 
 from sim_client import DEFAULT_ENDPOINT, SimClient, SimCommandError
 
@@ -24,7 +25,11 @@ VIZ_DIR = Path(__file__).resolve().parent / "viz"
 
 
 class StatePoller(threading.Thread):
-    """Polls get_state from the simulation and keeps the latest reply."""
+    """Polls the simulation and keeps the latest state plus a copy of all trails.
+
+    Trails are fetched incrementally (only new points) and cached here, so the
+    sim's load doesn't grow with the number of open browsers.
+    """
 
     def __init__(self, endpoint, rate_hz, timeout_ms):
         super().__init__(daemon=True)
@@ -34,6 +39,7 @@ class StatePoller(threading.Thread):
         self.lock = threading.Lock()
         self.payload = self._encode({"connected": False, "error": "waiting for first reply", "state": None})
         self.last_state = None
+        self.trails = {}  # id -> {"version", "resting", "points"}
 
     @staticmethod
     def _encode(obj):
@@ -47,6 +53,10 @@ class StatePoller(threading.Thread):
                 state.pop("ok", None)
                 self.last_state = state
                 doc = {"connected": True, "error": None, "state": state}
+                try:
+                    self._update_trails()
+                except SimCommandError:
+                    pass  # e.g. an older sim without get_trails: just no trails
             except (TimeoutError, SimCommandError) as e:
                 # Keep serving the last good state, flagged as stale.
                 doc = {"connected": False, "error": str(e), "state": self.last_state}
@@ -54,9 +64,42 @@ class StatePoller(threading.Thread):
                 self.payload = self._encode(doc)
             time.sleep(max(0.0, self.period - (time.monotonic() - started)))
 
+    def _update_trails(self):
+        with self.lock:
+            since = {i: [c["version"], c["points"][-1][0] if c["points"] else -1] for i, c in self.trails.items()}
+        reply = self.client.call("get_trails", since=since)["trails"]
+        updated = {}
+        with self.lock:
+            for sc_id, tr in reply.items():
+                cached = self.trails.get(sc_id)
+                if tr["full"] or cached is None or cached["version"] != tr["version"]:
+                    cached = {"version": tr["version"], "points": tr["points"]}
+                else:
+                    cached["points"].extend(tr["points"])
+                cached["resting"] = tr["resting"]
+                updated[sc_id] = cached
+            self.trails = updated  # drops craft that no longer exist
+
     def latest(self):
         with self.lock:
             return self.payload
+
+    def trails_since(self, since):
+        """Trails for a browser that already holds {id: [version, seq]}."""
+        out = {}
+        with self.lock:
+            for sc_id, c in self.trails.items():
+                known = since.get(sc_id) if isinstance(since, dict) else None
+                pts = c["points"]
+                full = True
+                if isinstance(known, list) and len(known) == 2 and known[0] == c["version"]:
+                    full = False
+                    k = len(pts)
+                    while k > 0 and pts[k - 1][0] > known[1]:
+                        k -= 1
+                    pts = pts[k:]
+                out[sc_id] = {"version": c["version"], "full": full, "resting": c["resting"], "points": list(pts)}
+        return self._encode({"trails": out})
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -68,15 +111,27 @@ class Handler(SimpleHTTPRequestHandler):
         self.poller = poller
         super().__init__(*args, directory=str(VIZ_DIR), **kwargs)
 
+    def _send_json_bytes(self, body):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
-        if self.path.split("?", 1)[0] == "/api/state":
-            body = self.poller.latest()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(body)
+        path, _, query = self.path.partition("?")
+        if path == "/api/state":
+            self._send_json_bytes(self.poller.latest())
+            return
+        if path == "/api/trails":
+            # ?since=<JSON {id: [version, seq]}>; anything unparsable means "send everything".
+            raw = parse_qs(query).get("since", ["{}"])[0]
+            try:
+                since = json.loads(raw)
+            except json.JSONDecodeError:
+                since = {}
+            self._send_json_bytes(self.poller.trails_since(since))
             return
         super().do_GET()
 

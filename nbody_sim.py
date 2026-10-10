@@ -23,11 +23,15 @@ Physics summary
   moving surface, capped at mu * normal force.
 * Thrust: constant force (inertial or local East-North-Up frame) and constant
   mass rate; persists until changed.  Cut off automatically at dry mass.
+* Trails: each craft records a thinned trajectory history during integration,
+  relative to the body whose sphere of influence it is in (non-rotating axes).
+  Nothing is recorded while a craft rests on a surface.
 
 Run:  python nbody_sim.py solar_system.yaml [--endpoint tcp://127.0.0.1:5555]
 """
 
 import argparse
+import itertools
 import json
 import math
 import sys
@@ -50,6 +54,12 @@ DEFAULT_SETTINGS = {
         "thrust_max_substep": 0.5,
         "contact_steps_per_period": 25,
     },
+    "trails": {
+        "max_points": 5000,         # per craft; older history is thinned beyond this
+        "min_spacing": 20.0,        # m
+        "altitude_fraction": 0.1,   # spacing <= this * altitude (finer near surfaces)...
+        "radius_fraction": 0.02,    # ...and <= this * distance from the reference body
+    },
 }
 
 DEFAULT_CONTACT = {
@@ -63,6 +73,12 @@ DEFAULT_CONTACT = {
 CONTACT_ZONE = 1.0
 # Engines cut off at max(dry_mass, MIN_MASS) so mass never reaches zero.
 MIN_MASS = 1.0e-6
+# A craft in contact moving slower than this relative to the surface is "resting".
+REST_SPEED = 1.0
+
+# Trail versions are unique for the life of the process (also across resets), so
+# clients holding an old copy always see a version change.
+_TRAIL_VERSIONS = itertools.count(1)
 
 
 class SimError(Exception):
@@ -246,6 +262,7 @@ class Spacecraft:
         self.cd_table = cd_table
         self.contact = contact  # optional per-craft override (dict of partial values)
         self.in_contact = set()
+        self.trail = Trail()
         self.clear_thrust()
 
     def clear_thrust(self):
@@ -264,6 +281,47 @@ class Spacecraft:
         p = dict(body.contact)
         p.update(self.contact)
         return p
+
+
+class Trail:
+    """Thinned trajectory history of one spacecraft.
+
+    Points are tuples (seq, t, body_index, x, y, z, brk): position relative to
+    the reference body's centre (inertial axes), with ``brk`` marking the start
+    of a new segment (e.g. liftoff after resting).  ``seq`` increases
+    monotonically so clients can fetch only new points; ``version`` changes
+    whenever existing points are removed, telling clients to refetch.
+    """
+
+    def __init__(self, points=(), resting=False):
+        self.points = list(points)
+        self.version = next(_TRAIL_VERSIONS)
+        self.next_seq = self.points[-1][0] + 1 if self.points else 0
+        self.resting = resting
+
+    def copy(self):
+        return Trail(self.points, self.resting)
+
+    def add(self, t, body_index, rel, brk, max_points):
+        self.points.append((self.next_seq, float(t), int(body_index),
+                            float(rel[0]), float(rel[1]), float(rel[2]), bool(brk)))
+        self.next_seq += 1
+        if len(self.points) > max_points:
+            self._thin(max_points)
+
+    def _thin(self, max_points):
+        """Keep the newest half intact; drop every other older point except segment ends."""
+        keep_recent = max(1, max_points // 2)
+        old, recent = self.points[:-keep_recent], self.points[-keep_recent:]
+        thinned = []
+        for k, p in enumerate(old):
+            prev = old[k - 1] if k > 0 else None
+            nxt = old[k + 1] if k + 1 < len(old) else recent[0]
+            boundary = p[6] or nxt[6] or nxt[2] != p[2] or (prev is not None and prev[2] != p[2])
+            if k % 2 == 0 or boundary:
+                thinned.append(p)
+        self.points = (thinned + recent)[-max_points:]
+        self.version = next(_TRAIL_VERSIONS)
 
 
 def _parse_spacecraft_props(spec, what, inherit=None):
@@ -356,6 +414,11 @@ class Simulation:
                                         "body_max_substep", positive=True)
         self.sc_settings = {k: _number(v, f"simulation.spacecraft.{k}", positive=True) for k, v in sc_cfg.items()
                             if k in DEFAULT_SETTINGS["spacecraft"]}
+        trail_cfg = dict(DEFAULT_SETTINGS["trails"])
+        trail_cfg.update(sim_cfg.get("trails") or {})
+        self.trail_settings = {k: _number(v, f"simulation.trails.{k}", positive=True) for k, v in trail_cfg.items()
+                               if k in DEFAULT_SETTINGS["trails"]}
+        self.trail_settings["max_points"] = max(10, int(self.trail_settings["max_points"]))
 
         body_specs = cfg.get("bodies")
         if not isinstance(body_specs, list) or not body_specs:
@@ -376,8 +439,10 @@ class Simulation:
         self.spacecraft = {}
         for i, spec in enumerate(cfg.get("spacecraft") or []):
             self._add_initial_spacecraft(spec, i)
+        self._compute_spheres_of_influence()
         for sc in self.spacecraft.values():
             self._update_contact(sc, self.time, self.bpos, [])
+            self._record_trail(sc, self.time, self.bpos, self.bvel, force=True)
 
     def _add_initial_spacecraft(self, spec, index):
         what = f"spacecraft '{spec.get('id', index)}'" if isinstance(spec, dict) else f"spacecraft #{index}"
@@ -577,6 +642,7 @@ class Simulation:
                 sc.mass = floor
                 self._engine_cutoff(sc, t, events)
             self._update_contact(sc, t, P1, events)
+            self._record_trail(sc, t, P1, V1, force=cutoff)
 
     def _engine_cutoff(self, sc, t, events):
         sc.clear_thrust()
@@ -593,6 +659,92 @@ class Simulation:
             events.append({"time": t, "spacecraft": sc.id, "event": "contact_end", "body": b})
         sc.in_contact = now
 
+    # -- trails ----------------------------------------------------------------
+
+    def _compute_spheres_of_influence(self):
+        """Laplace sphere-of-influence radius of every body from current positions.
+
+        Each body's primary is the least massive more-massive body whose Hill
+        sphere contains it (so the Moon orbits Earth, not the Sun); the most
+        massive body has an infinite sphere.
+        """
+        masses = np.array([b.mass for b in self.bodies])
+        order = np.argsort(-masses, kind="stable")
+        n = len(self.bodies)
+        self.soi = np.full(n, np.inf)
+        hill = np.full(n, np.inf)
+        done = [int(order[0])]
+        for i in map(int, order[1:]):
+            dist = np.linalg.norm(self.bpos[done] - self.bpos[i], axis=1)
+            inside = [j for j, d in zip(done, dist) if d < hill[j]]
+            parent = min(inside, key=lambda j: masses[j])
+            d = float(np.linalg.norm(self.bpos[i] - self.bpos[parent]))
+            self.soi[i] = d * (masses[i] / masses[parent]) ** 0.4
+            hill[i] = d * (masses[i] / (3.0 * masses[parent])) ** (1.0 / 3.0)
+            done.append(i)
+
+    def _reference_body(self, r, P):
+        """Index of the smallest sphere of influence containing position r."""
+        dist = np.sqrt(np.einsum("ij,ij->i", P - r, P - r))
+        inside = np.flatnonzero(dist < self.soi)
+        if not len(inside):
+            return int(np.argmin(dist))
+        return int(inside[np.argmin(self.soi[inside])])
+
+    def _record_trail(self, sc, t, P, V, force=False):
+        s = self.trail_settings
+        ref = self._reference_body(sc.pos, P)
+        body = self.bodies[ref]
+        rel = sc.pos - P[ref]
+        r = float(np.linalg.norm(rel))
+        alt = r - body.radius
+        tr = sc.trail
+
+        # While resting on a surface, record only the touchdown point: in the
+        # non-rotating frame a parked craft would otherwise trace a latitude circle.
+        v_surf = sc.vel - (V[ref] + np.cross(body.omega_vec, rel))
+        if alt < 0.0 and float(np.linalg.norm(v_surf)) < REST_SPEED:
+            if not tr.resting:
+                tr.add(t, ref, rel, not tr.points, s["max_points"])
+                tr.resting = True
+            return
+        if tr.resting:  # leaving the surface starts a new segment
+            tr.resting = False
+            tr.add(t, ref, rel, True, s["max_points"])
+            return
+
+        last = tr.points[-1] if tr.points else None
+        if not force and last is not None and last[2] == ref:
+            spacing = min(s["radius_fraction"] * r, max(s["altitude_fraction"] * alt, s["min_spacing"]))
+            moved = math.dist(last[3:6], rel)
+            if moved < spacing:
+                return
+        tr.add(t, ref, rel, last is None, s["max_points"])
+
+    def trails(self, since=None, ids=None):
+        """Trail data per craft; with ``since`` = {id: [version, seq]}, only new points."""
+        since = since if isinstance(since, dict) else {}
+        out = {}
+        for sc_id in (list(self.spacecraft) if ids is None else [str(i) for i in ids]):
+            tr = self._craft(sc_id).trail
+            known = since.get(sc_id)
+            full = True
+            pts = tr.points
+            if (isinstance(known, (list, tuple)) and len(known) == 2
+                    and known[0] == tr.version and isinstance(known[1], (int, float))):
+                full = False
+                k = len(pts)
+                while k > 0 and pts[k - 1][0] > known[1]:
+                    k -= 1
+                pts = pts[k:]
+            out[sc_id] = {
+                "version": tr.version,
+                "full": full,
+                "resting": tr.resting,
+                "points": [[p[0], p[1], self.bodies[p[2]].id, p[3], p[4], p[5], int(p[6])] for p in pts],
+            }
+        return out
+
     # -- public operations ---------------------------------------------------
 
     def step(self, dt):
@@ -600,6 +752,7 @@ class Simulation:
         events = []
         if dt == 0.0:
             return events
+        self._compute_spheres_of_influence()
         traj = self._advance_bodies(dt)
         for sc in self.spacecraft.values():
             self._advance_spacecraft(sc, traj, self.time, dt, events)
@@ -652,6 +805,8 @@ class Simulation:
                 dv = dv[0] * east + dv[1] * north + dv[2] * up
             craft = Spacecraft(cid, parent.pos.copy(), parent.vel + dv, **props)
             craft.in_contact = set(parent.in_contact)
+            craft.trail = parent.trail.copy()  # continuous history from the pad
+            self._record_trail(craft, self.time, self.bpos, self.bvel, force=True)
             new.append(craft)
         del self.spacecraft[parent.id]
         for craft in new:
@@ -724,6 +879,11 @@ class Simulation:
                 "drag_coefficient": cd,
             },
             "acceleration": {k: _list(val) for k, val in acc.items()},
+            "trail": {
+                "reference_body": self.bodies[self._reference_body(sc.pos, self.bpos)].id,
+                "points": len(sc.trail.points),
+                "version": sc.trail.version,
+            },
         }
 
     def state(self, relative_to=None, bodies=True, spacecraft=True):
@@ -745,6 +905,7 @@ class Simulation:
             "gravitational_constant": self.G,
             "body_max_substep": self.body_max_substep,
             "spacecraft_settings": self.sc_settings,
+            "trail_settings": self.trail_settings,
             "bodies": [b.id for b in self.bodies],
             "spacecraft": list(self.spacecraft),
         }
@@ -805,6 +966,9 @@ class CommandHandler:
         new_ids = self.sim.stage(_require(req, "id", "stage"), _require(req, "children", "stage"),
                                  req.get("frame", "inertial"), req.get("body"))
         return {"removed": req["id"], "created": new_ids}
+
+    def cmd_get_trails(self, req):
+        return {"trails": self.sim.trails(req.get("since"), req.get("ids"))}
 
     def cmd_reset(self, req):
         self.sim.load()

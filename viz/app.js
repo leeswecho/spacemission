@@ -10,6 +10,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/OrbitControls.js';
 import { EclipticOverlay } from './ecliptic.js';
+import { TrailRenderer } from './trails.js';
 
 const KM = 1000;
 const AU = 1.495978707e11;
@@ -203,28 +204,36 @@ const ui = {
   panel: document.getElementById('panel'),
   panelToggle: document.getElementById('panel-toggle'),
   eclipticToggle: document.getElementById('toggle-ecliptic'),
+  trailsToggle: document.getElementById('toggle-trails'),
 };
 
-// Ecliptic grid overlay; on/off choice is remembered per browser.
+// Overlays; each on/off choice is remembered per browser.
 const ecliptic = new EclipticOverlay(scene, labelLayer);
-const ECLIPTIC_PREF = 'viz.ecliptic';
+const trails = new TrailRenderer(scene, CRAFT_COLOR);
 
-function setEclipticEnabled(on) {
-  ecliptic.setEnabled(on);
-  ui.eclipticToggle.checked = on;
+function bindToggle(overlay, checkbox, prefKey) {
+  const set = (on) => {
+    overlay.setEnabled(on);
+    checkbox.checked = on;
+    try {
+      localStorage.setItem(prefKey, on ? '1' : '0');
+    } catch {
+      // storage unavailable (private mode etc.): just don't remember
+    }
+  };
+  checkbox.addEventListener('change', () => set(checkbox.checked));
+  let saved = null;
   try {
-    localStorage.setItem(ECLIPTIC_PREF, on ? '1' : '0');
+    saved = localStorage.getItem(prefKey);
   } catch {
-    // storage unavailable (private mode etc.): just don't remember
+    // fall through to the default
   }
+  set(saved !== '0');
+  return set;
 }
 
-ui.eclipticToggle.addEventListener('change', () => setEclipticEnabled(ui.eclipticToggle.checked));
-try {
-  setEclipticEnabled(localStorage.getItem(ECLIPTIC_PREF) !== '0');
-} catch {
-  setEclipticEnabled(true);
-}
+const setEclipticEnabled = bindToggle(ecliptic, ui.eclipticToggle, 'viz.ecliptic');
+const setTrailsEnabled = bindToggle(trails, ui.trailsToggle, 'viz.trails');
 
 // Ecliptic grid centre: the Sun, or the barycentre if there is no 'sun' body.
 function eclipticCentreRel() {
@@ -354,6 +363,7 @@ function updateRelativePositions() {
   }
   const sun = objects.get('sun');
   if (sun) sunLight.position.copy(sun.rel);
+  trails.rebuild(objects, f.abs);
 }
 
 // ---------------------------------------------------------------------------
@@ -435,6 +445,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === '-' || e.key === '_') zoomBy(1.25);
   else if (e.key === 'f' || e.key === 'F') setFocus(focusId);
   else if (e.key === 'e' || e.key === 'E') setEclipticEnabled(!ecliptic.enabled);
+  else if (e.key === 't' || e.key === 'T') setTrailsEnabled(!trails.enabled);
 });
 
 ui.panelToggle.addEventListener('click', () => {
@@ -525,11 +536,22 @@ function setStatus(kind, text) {
 // Polling
 // ---------------------------------------------------------------------------
 
+async function fetchTrails() {
+  try {
+    const since = encodeURIComponent(JSON.stringify(trails.since()));
+    const res = await fetch(`/api/trails?since=${since}`, { cache: 'no-store' });
+    return (await res.json()).trails;
+  } catch {
+    return null;  // keep the trails we have
+  }
+}
+
 async function poll() {
   try {
-    const res = await fetch('/api/state', { cache: 'no-store' });
+    const [res, trailUpdate] = await Promise.all([fetch('/api/state', { cache: 'no-store' }), fetchTrails()]);
     const doc = await res.json();
-    if (doc.state) applyState(doc.state);
+    if (trailUpdate) trails.merge(trailUpdate);
+    if (doc.state) applyState(doc.state);  // re-anchors trails to current body positions
     if (doc.connected) setStatus('ok', 'Live');
     else setStatus(doc.state ? 'bad' : 'wait', doc.state ? 'Sim unreachable — last state' : 'Waiting for simulation');
   } catch (err) {

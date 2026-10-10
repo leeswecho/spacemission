@@ -67,6 +67,11 @@ simulation:                       # all optional
     atmosphere_max_substep: 1.0
     thrust_max_substep: 0.5
     contact_steps_per_period: 25
+  trails:                         # trajectory history per spacecraft
+    max_points: 5000              # older history is thinned beyond this
+    min_spacing: 20.0             # m
+    altitude_fraction: 0.1        # point spacing <= this * altitude, but >= min_spacing...
+    radius_fraction: 0.02         # ...and <= this * distance from the reference body
 
 bodies:
   - id: earth
@@ -123,6 +128,7 @@ Vectors are `[x, y, z]` lists.
 | `get_spacecraft` | `id`, optional `relative_to` | `spacecraft` |
 | `set_thrust` | `id`, `force` (N), `mass_rate` (kg/s, default 0), `frame` (`inertial` \| `enu`), `body` (required for `enu`) | — |
 | `stage` | `id`, `children` (list, ≥ 2), optional default `frame` / `body` | `removed`, `created` |
+| `get_trails` | optional `since` (`{id: [version, seq]}`), `ids` | `trails` (see below) |
 | `reset` | — | reloads the scenario file, t = 0 |
 | `shutdown` | — | server exits |
 
@@ -139,7 +145,27 @@ with `time` and `spacecraft`.
 `acceleration` broken down into `gravity` / `drag` / `contact` / `thrust` / `total`, and
 `nearest_body`. That last block covers `altitude`, `latitude`, `longitude`, `in_contact`,
 `surface_relative_velocity` (inertial axes and ENU), `airspeed`, `density`,
-`dynamic_pressure` and `drag_coefficient`.
+`dynamic_pressure` and `drag_coefficient`. A `trail` block gives the craft's current
+`reference_body`, its trail point count and trail `version`.
+
+**Trails.** Each spacecraft records its trajectory as it is integrated, so even a single
+1-day step traces the full path.
+* **Reference body:** each point is stored relative to the body whose sphere of influence
+  holds the craft at that moment, in non-rotating axes: Earth in LEO, the Moon in lunar
+  orbit, the Sun in interplanetary cruise. Re-drawn around that body's current position, an
+  orbit closes into an ellipse.
+* **Point spacing:** finer near surfaces and coarser far away (see `simulation.trails`).
+  Beyond `max_points`, the older half of the history is thinned out.
+* **Resting:** nothing is recorded while a craft rests on a surface, which would otherwise
+  sweep a latitude circle in this frame. Leaving the surface starts a new segment.
+* **Staging:** children inherit the parent's trail, so each stage's path is continuous
+  from the pad.
+
+`get_trails` returns `{id: {version, full, resting, points}}`. Each point is
+`[seq, t, body_id, x, y, z, brk]`: position in metres relative to `body_id`'s centre, with
+`brk = 1` marking the start of a new segment. `seq` increases monotonically. Passing
+`since = {id: [version, last_seq]}` returns only newer points (`full: false`). A `version`
+change (from thinning, staging or reset) means the client should replace its copy (`full: true`).
 
 ### Example session (Python)
 
@@ -190,6 +216,10 @@ offline.
     vernal-equinox direction (♈, ecliptic longitude 0°, +X) is highlighted in teal.
   * Within about 0.002–0.02 AU of the focus: the grid fades into a local ring around the focused
     object. The ring is parallel to the ecliptic, with a ♈ spoke and an "ecliptic N" axis.
+* Spacecraft trails (toggle with the checkbox or `T`): each craft's recorded trajectory,
+  drawn around its reference body's current position and fading with age. `viz_server.py`
+  keeps a cached copy that it updates incrementally, so the sim's load doesn't grow with the
+  number of open browsers.
 * URL parameters: `?focus=<id>` sets the initial focus. `&dist=<km>` sets the initial camera
   distance from that object's centre.
 

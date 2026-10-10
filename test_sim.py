@@ -175,6 +175,82 @@ class PhysicsTests(unittest.TestCase):
         with self.assertRaises(SimError):
             sim.stage("s1", [{"id": "s2", "mass": 1.0}, {"id": "x", "mass": 1.0}])
 
+    def test_trail_orbit(self):
+        gm = 398600.435507e9
+        r = 6.378137e6 + 400e3
+        sim = self.sim_with([{
+            "id": "sat", "mass": 1000.0,
+            "initial_state": {"frame": "relative", "body": "earth",
+                              "position": [r, 0, 0], "velocity": [0, math.sqrt(gm / r), 0]},
+        }])
+        period = 2 * math.pi * math.sqrt(r**3 / gm)
+        for _ in range(10):
+            sim.step(period / 10)
+        pts = sim.spacecraft["sat"].trail.points
+        earth = sim.body_by_id["earth"].index
+        self.assertTrue(all(p[2] == earth for p in pts))
+        self.assertTrue(100 < len(pts) < 3000, len(pts))
+        self.assertEqual([p[0] for p in pts], list(range(len(pts))))
+        radii = [math.hypot(*p[3:6]) for p in pts]
+        self.assertAlmostEqual(min(radii), r, delta=5e3)
+        self.assertAlmostEqual(max(radii), r, delta=5e3)
+        self.assertLess(math.dist(pts[0][3:6], pts[-1][3:6]), 0.05 * r)  # closed loop
+
+        # Incremental fetch returns only newer points; a wrong version forces a full copy.
+        full = sim.trails()["sat"]
+        sim.step(60.0)
+        delta = sim.trails(since={"sat": [full["version"], full["points"][-1][0]]})["sat"]
+        self.assertFalse(delta["full"])
+        self.assertTrue(delta["points"])
+        self.assertTrue(all(p[0] > full["points"][-1][0] for p in delta["points"]))
+        self.assertEqual(delta["points"][0][2], "earth")
+        self.assertTrue(sim.trails(since={"sat": [-1, 0]})["sat"]["full"])
+
+    def test_trail_reference_bodies(self):
+        sim = Simulation(SCENARIO)
+        sun, earth, luna = (sim.body_by_id[n].index for n in ("sun", "earth", "luna"))
+        self.assertEqual(sim._reference_body(sim.bpos[earth] + [7e6, 0, 0], sim.bpos), earth)
+        self.assertEqual(sim._reference_body(sim.bpos[luna] + [2e6, 0, 0], sim.bpos), luna)
+        self.assertEqual(sim._reference_body(sim.bpos[earth] + [5e9, 0, 0], sim.bpos), sun)
+
+    def test_trail_resting_and_staging(self):
+        sim = Simulation(SCENARIO)
+        sc = sim.spacecraft["falcon9"]
+        for _ in range(5):
+            sim.step(10.0)
+        self.assertTrue(sc.trail.resting)
+        self.assertLessEqual(len(sc.trail.points), 2)  # nothing recorded while parked
+        sim.set_thrust("falcon9", [0, 0, 7.607e6], -2750.0, "enu", "earth")
+        sim.step(60.0)
+        n = len(sc.trail.points)
+        self.assertGreater(n, 10)
+        self.assertFalse(sc.trail.resting)
+        self.assertTrue(any(p[6] for p in sc.trail.points[1:]))  # liftoff starts a new segment
+        sim.stage("falcon9", [{"id": "a", "mass": 1000.0}, {"id": "b", "mass": 2000.0}])
+        a, b = sim.spacecraft["a"].trail, sim.spacecraft["b"].trail
+        self.assertEqual(a.points[:n], sc.trail.points[:n])
+        self.assertEqual(len(a.points), len(b.points))
+        self.assertNotEqual(a.version, b.version)
+
+    def test_trail_thinning(self):
+        tmp = make_scenario([{
+            "id": "sat", "mass": 1000.0,
+            "initial_state": {"frame": "relative", "body": "earth",
+                              "position": [6.778137e6, 0, 0], "velocity": [0, 7668.6, 0]},
+        }], self.tmp.name)
+        cfg = yaml.safe_load(tmp.read_text(encoding="utf-8"))
+        cfg["simulation"]["trails"] = {"max_points": 50}
+        tmp.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+        sim = Simulation(tmp)
+        v0 = sim.spacecraft["sat"].trail.version
+        sim.step(5400.0)
+        tr = sim.spacecraft["sat"].trail
+        self.assertLessEqual(len(tr.points), 50)
+        self.assertNotEqual(tr.version, v0)
+        seqs = [p[0] for p in tr.points]
+        self.assertEqual(seqs, sorted(seqs))
+        self.assertEqual(seqs[-1], tr.next_seq - 1)
+
     def test_bad_input(self):
         sim = Simulation(SCENARIO)
         with self.assertRaises(SimError):
