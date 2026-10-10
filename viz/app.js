@@ -9,6 +9,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/OrbitControls.js';
+import { EclipticOverlay } from './ecliptic.js';
 
 const KM = 1000;
 const AU = 1.495978707e11;
@@ -201,7 +202,37 @@ const ui = {
   detailsTitle: document.getElementById('details-title'),
   panel: document.getElementById('panel'),
   panelToggle: document.getElementById('panel-toggle'),
+  eclipticToggle: document.getElementById('toggle-ecliptic'),
 };
+
+// Ecliptic grid overlay; on/off choice is remembered per browser.
+const ecliptic = new EclipticOverlay(scene, labelLayer);
+const ECLIPTIC_PREF = 'viz.ecliptic';
+
+function setEclipticEnabled(on) {
+  ecliptic.setEnabled(on);
+  ui.eclipticToggle.checked = on;
+  try {
+    localStorage.setItem(ECLIPTIC_PREF, on ? '1' : '0');
+  } catch {
+    // storage unavailable (private mode etc.): just don't remember
+  }
+}
+
+ui.eclipticToggle.addEventListener('change', () => setEclipticEnabled(ui.eclipticToggle.checked));
+try {
+  setEclipticEnabled(localStorage.getItem(ECLIPTIC_PREF) !== '0');
+} catch {
+  setEclipticEnabled(true);
+}
+
+// Ecliptic grid centre: the Sun, or the barycentre if there is no 'sun' body.
+function eclipticCentreRel() {
+  const sun = objects.get('sun');
+  if (sun) return sun.rel;
+  const f = objects.get(focusId);
+  return f ? new THREE.Vector3(-f.abs[0] / KM, -f.abs[1] / KM, -f.abs[2] / KM) : new THREE.Vector3();
+}
 
 function makeLabel(id, kind, color) {
   const el = document.createElement('div');
@@ -403,6 +434,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key === '+' || e.key === '=') zoomBy(0.8);
   else if (e.key === '-' || e.key === '_') zoomBy(1.25);
   else if (e.key === 'f' || e.key === 'F') setFocus(focusId);
+  else if (e.key === 'e' || e.key === 'E') setEclipticEnabled(!ecliptic.enabled);
 });
 
 ui.panelToggle.addEventListener('click', () => {
@@ -618,6 +650,7 @@ function frame() {
   if (latest) {
     updateBodyUniforms();
     updateLabels();
+    ecliptic.update({ camera, canvas, centreRel: eclipticCentreRel(), focusRadiusKm: focusRadiusKm() });
     const r = focusRadiusKm();
     ui.range.textContent = fmtLen((camera.position.length() - r) * KM) + (r ? ' alt' : '');
   }

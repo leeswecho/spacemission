@@ -108,6 +108,29 @@ html, body {
 #details dt { color: var(--muted); }
 #details dd { margin: 0; text-align: right; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
 .hint { color: var(--muted); font-size: 11px; margin: 12px 0 0; }
+.toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.toggle input { margin: 0; accent-color: var(--accent); }
+kbd {
+  font: 10px ui-monospace, "Cascadia Mono", Consolas, monospace;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--muted);
+}
+
+/* ---- Ecliptic overlay labels ---- */
+.ecl-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-size: 10px;
+  color: #9fb4e0;
+  white-space: nowrap;
+  pointer-events: none;
+  text-shadow: 0 0 3px #000, 0 0 2px #000;
+  will-change: transform;
+}
+.ecl-label.accent { color: #4fd1c5; font-weight: 600; }
 
 /* ---- Labels ---- */
 #labels { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }

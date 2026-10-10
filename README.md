@@ -183,6 +183,12 @@ offline.
 * Bodies are drawn as exact ray-traced spheres, lit by the Sun, with a lat/lon grid that adds
   finer lines as you zoom in. The prime meridian and equator are highlighted.
 * Spacecraft are spheres sized to their reference diameter.
+* Ecliptic grid (toggle with the panel checkbox or `E`; the choice is remembered per browser):
+  * At solar-system scale: a polar grid in the ecliptic plane centred on the Sun. Rings at
+    0.1 / 1 / 10 AU appear as you zoom and carry AU labels. Spokes are every 30°, and the
+    vernal-equinox direction (♈, ecliptic longitude 0°, +X) is highlighted in teal.
+  * Within about 0.002–0.02 AU of the focus: the grid fades into a local ring around the focused
+    object. The ring is parallel to the ecliptic, with a ♈ spoke and an "ecliptic N" axis.
 * URL parameters: `?focus=<id>` sets the initial focus. `&dist=<km>` sets the initial camera
   distance from that object's centre.
 
