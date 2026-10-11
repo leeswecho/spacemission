@@ -43,7 +43,14 @@ const VEHICLES = {
     fairing: { d: 5.1, l: 19.1 },
   },
   new_glenn: {
-    core: { d: 7.0, l: 57.5, color: WHITE, band: 0x1d2b4a },
+    core: {
+      d: 7.0, l: 57.5, color: WHITE, band: 0x1d2b4a,
+      // Two long aft strakes, and four actuated fins just below the interstage.
+      surfaces: [
+        { count: 2, angle: 0, y: 1.6, outline: [[0, 0], [2.6, 0], [2.6, 2.5], [0, 14.0]], color: 0xd4d7db },
+        { count: 4, angle: 45, y: 46.0, outline: [[0, 0], [2.4, 1.2], [2.4, 3.0], [0, 4.2]], color: 0x3b3f47 },
+      ],
+    },
     upper: { d: 7.0, l: 23.4, color: WHITE },
     fairing: { d: 7.0, l: 21.9 },
   },
@@ -87,7 +94,24 @@ function coreStage(v, group, y0) {
   group.add(cylinder(c.d, c.l, c.color, y0));
   group.add(cylinder(c.d * 1.01, 1.6, ENGINE, y0));                    // engine section
   if (c.band) group.add(cylinder(c.d * 1.01, c.l * 0.08, c.band, y0 + c.l * 0.92));  // interstage
+  for (const surf of c.surfaces ?? []) aeroSurfaces(surf, c.d / 2, group, y0);
   return y0 + c.l;
+}
+
+// Flat plates (strakes, fins) spaced evenly around a stage.  `outline` is the planform as
+// [outward from the skin, up the stage] points in metres, with the root along the skin.
+function aeroSurfaces(surf, radius, group, y0) {
+  const thickness = 0.3;
+  const shape = new THREE.Shape(surf.outline.map(([x, y]) => new THREE.Vector2(x, y)));
+  const geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
+  geometry.translate(0, 0, -thickness / 2);
+  for (let i = 0; i < surf.count; i++) {
+    const a = THREE.MathUtils.degToRad(surf.angle) + (i / surf.count) * Math.PI * 2;
+    const m = new THREE.Mesh(i === 0 ? geometry : geometry.clone(), material(surf.color));
+    m.rotation.y = -a;  // local +X (outward) -> (cos a, 0, sin a)
+    m.position.set(Math.cos(a) * (radius - 0.05), y0 + surf.y, Math.sin(a) * (radius - 0.05));
+    group.add(m);
+  }
 }
 
 function boosterRing(v, count, group, y0) {

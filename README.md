@@ -226,7 +226,8 @@ offline.
   to an image.
 * Spacecraft are drawn as simple true-size models built in `viz/models.js`: core, boosters,
   upper stage, ogive fairing (two half shells once jettisoned) and a satellite with solar
-  panels, in each rocket's colours. The craft's `model` tag says which rocket and which parts
+  panels, in each rocket's colours. New Glenn's first stage also has its two aft strakes
+  and four fins below the interstage. The craft's `model` tag says which rocket and which parts
   it is made of. A model points along its velocity relative to the nearest body: the
   surface-relative velocity low down, blending to the orbital velocity between 50 and 150 km.
   A craft at rest stands radially outward from the body. A craft without a recognised tag is
