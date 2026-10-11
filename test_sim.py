@@ -373,6 +373,36 @@ class MeoAutopilotTest(unittest.TestCase):
         t_apo = ap.time_to_apoapsis(np.array([r_p, 0, 0]), np.array([0, vp, 0]), mu)
         self.assertAlmostEqual(t_apo, math.pi * math.sqrt(a**3 / mu), delta=1.0)
 
+    def test_pacing_holds_warp_through_long_steps(self):
+        import meo_autopilot as ap
+
+        class FakeSim:
+            def __init__(self):
+                self.t, self.steps = 0.0, []
+
+            def step(self, dt):
+                self.steps.append(dt)
+                self.t += dt
+                return {"time": self.t, "events": []}
+
+        params, errors, _ = ap.validate({"perigee_km": 20180, "apogee_km": 20180, "inclination_deg": 55,
+                                         "payload_kg": 1000, "pace": "x5"})
+        self.assertEqual(errors, [])
+        status = ap.MissionStatus()
+        status.begin(params, None)
+        sim = FakeSim()
+        m = ap.MeoMission(sim, params, status)
+        m.warp = (20.0, 20.0)  # constant warp, scaled up so the test is quick
+        t0 = time.monotonic()
+        m.step(30.0, powered=False)  # a long coast step
+        coast_wall = time.monotonic() - t0
+        m.step(0.5)                  # followed by a powered tick
+        total_wall = time.monotonic() - t0
+        self.assertAlmostEqual(coast_wall, 30.0 / 20.0, delta=0.15)
+        self.assertAlmostEqual(total_wall, 30.5 / 20.0, delta=0.15)  # the burn isn't slowed afterwards
+        self.assertLessEqual(max(sim.steps), 20.0 * ap.PACE_CHUNK + 1e-9)  # long steps were chunked
+        self.assertAlmostEqual(sim.t, 30.5)
+
     def test_gps_mission(self):
         import meo_autopilot as ap
         from sim_client import SimClient

@@ -60,6 +60,7 @@ MEO_MAX_ALT = 35_786e3       # m (geostationary altitude)
 MAX_PAYLOAD = 25_000.0       # kg
 S2_MAX_ACCEL = 4.0 * G0      # throttle the upper stage to stay under 4 g
 TICK = 0.5                   # s, guidance update interval in powered flight
+PACE_CHUNK = 0.25            # s of wall time per sim step when a time warp is set
 KICK_SPEED = 60.0            # m/s, start of pitch-over
 KICK_ANGLE = 15.0            # deg (tuned: MECO ~78 km, max-Q ~45 kPa)
 KICK_DURATION = 10.0         # s
@@ -360,21 +361,42 @@ class MeoMission:
         self.sim.set_thrust(vehicle or self.vehicle, [0.0, 0.0, 0.0], 0.0)
 
     def step(self, dt, powered=True):
-        """Advance the sim, honouring the pacing preset and collecting events."""
-        self.check_abort()
+        """Advance the sim by dt, honouring the pacing preset and collecting events.
+
+        With a time warp, a long step is split into chunks of at most
+        PACE_CHUNK seconds of wall time, and the runner sleeps until wall time
+        catches up with warp-scaled sim time, so long coasts play at the chosen
+        warp too.  If the sim falls behind, the pacing clock is re-anchored
+        rather than racing ahead later to catch up.
+        """
         warp = self.warp[0] if powered else self.warp[1]
-        reply = self.sim.step(dt)
-        self.t = reply["time"]
-        self.pending_events.extend(reply.get("events", []))
-        if warp:
-            now = time.monotonic()
-            if self._pace_anchor is None or self._pace_anchor[2] != warp:
-                self._pace_anchor = (now, self.t - dt, warp)
-            wall0, sim0, _ = self._pace_anchor
-            ahead = (self.t - sim0) / warp - (now - wall0)
-            if ahead > 0:
-                time.sleep(min(ahead, 1.0))
+        chunk = dt if not warp else max(warp * PACE_CHUNK, 1e-3)
+        remaining = dt
+        reply = None
+        while remaining > 1e-9:
+            self.check_abort()
+            d = min(chunk, remaining)
+            reply = self.sim.step(d)
+            remaining -= d
+            self.t = reply["time"]
+            self.pending_events.extend(reply.get("events", []))
+            if warp:
+                self._pace(warp, d)
         return reply
+
+    def _pace(self, warp, d):
+        now = time.monotonic()
+        if self._pace_anchor is None or self._pace_anchor[2] != warp:
+            self._pace_anchor = (now, self.t - d, warp)
+        wall0, sim0, _ = self._pace_anchor
+        ahead = (self.t - sim0) / warp - (now - wall0)
+        if ahead < -1.0:  # the sim can't keep up: don't bank the deficit
+            self._pace_anchor = (now, self.t, warp)
+            return
+        while ahead > 0:  # sleep in short slices so an abort is noticed quickly
+            self.check_abort()
+            time.sleep(min(ahead, PACE_CHUNK))
+            ahead = (self.t - sim0) / warp - (time.monotonic() - wall0)
 
     def take_events(self, kinds=None, craft=None):
         out = [e for e in self.pending_events
@@ -685,7 +707,10 @@ class MeoMission:
             remaining = time_to_apoapsis(r, v, self.mu) - lead
             if remaining <= 0.5:
                 return
-            self.step(min(remaining, 600.0), powered=False)
+            # With a time warp, keep each step to about a second of wall time so the
+            # page's telemetry keeps updating during long coasts.
+            max_step = 600.0 if not self.warp[1] else max(1.0, self.warp[1] * 1.0)
+            self.step(min(remaining, max_step), powered=False)
 
     # 8. Apogee burn
     def _apogee_burn(self):
