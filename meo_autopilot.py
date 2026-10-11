@@ -499,6 +499,7 @@ class MeoMission:
             "inclination": el["inc"],
             "mass": sc["mass"],
             "propellant": max(0.0, sc["mass"] - sc["dry_mass"]),
+            "propellant_full": self._full_load() if sc["id"] == self.vid else None,
             "thrust_kn": float(np.linalg.norm(sc["thrust"]["force"])) / 1e3,
             "accel_g": float(np.linalg.norm(sc["acceleration"]["total"])) / G0,
             "dynamic_pressure": nb["dynamic_pressure"],
@@ -536,6 +537,15 @@ class MeoMission:
                 thr = core.get("boost_throttle", 1.0)
         thr = max(0.0, min(thr, (G_LIMIT * m - t_b) / t_core))
         return t_b + thr * t_core, -(mdot_b + thr * core["mdot"])
+
+    def _full_load(self):
+        """Propellant (kg) of the engines now attached when fully loaded."""
+        if self.stage == "upper":
+            return self.cfg["upper"]["prop"]
+        full = self.cfg["core"]["prop"]
+        if self.stage == "boost":
+            full += self.b["count"] * self.b["prop"]
+        return full
 
     def _model(self, parts):
         """Model tag for a craft made of these parts (see viz/models.js)."""

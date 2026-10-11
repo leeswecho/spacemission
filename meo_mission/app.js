@@ -386,6 +386,14 @@ function launchTime(log) {
   return e ? e.t : null;
 }
 
+// Remaining propellant, with the share of the attached stages' full load when known.
+function propellantText(tel) {
+  const kg = `${fmt(tel.propellant)} kg`;
+  if (!tel.propellant_full) return kg;
+  const pct = (100 * tel.propellant) / tel.propellant_full;
+  return `${kg} (${fmt(pct, pct < 10 ? 1 : 0)}%)`;
+}
+
 function renderTelemetry(tel, t0) {
   if (!tel || tel.t === undefined) {
     ui.telemetry.replaceChildren();
@@ -402,7 +410,7 @@ function renderTelemetry(tel, t0) {
     ['Apogee', tel.apogee_km === null ? 'escape' : `${fmt(tel.apogee_km)} km`],
     ['Inclination', `${fmt(tel.inclination, 2)}°`],
     ['Mass', `${fmt(tel.mass)} kg`],
-    ['Propellant', `${fmt(tel.propellant)} kg`],
+    ['Propellant', propellantText(tel)],
     ['Thrust', `${fmt(tel.thrust_kn)} kN`],
     ['Acceleration', `${fmt(tel.accel_g, 2)} g`],
     ['Dynamic pressure', `${fmt(tel.dynamic_pressure / 1000, 1)} kPa`],
