@@ -216,11 +216,16 @@ offline.
   finer lines as you zoom in. The prime meridian and equator are highlighted.
 * Spacecraft are spheres sized to their reference diameter.
 * Ecliptic grid (toggle with the panel checkbox or `E`; the choice is remembered per browser):
-  * At solar-system scale: a polar grid in the ecliptic plane centred on the Sun. Rings at
-    0.1 / 1 / 10 AU appear as you zoom and carry AU labels. Spokes are every 30°, and the
-    vernal-equinox direction (♈, ecliptic longitude 0°, +X) is highlighted in teal.
-  * Within about 0.002–0.02 AU of the focus: the grid fades into a local ring around the focused
-    object. The ring is parallel to the ecliptic, with a ♈ spoke and an "ecliptic N" axis.
+  a polar grid in the ecliptic plane centred on the Sun. Rings at 0.1 / 1 / 10 AU appear as
+  you zoom and carry AU labels. Spokes are every 30°, and the vernal-equinox direction (♈,
+  ecliptic longitude 0°, +X) is highlighted in teal. It fades out within about 0.002–0.02 AU
+  of the focus.
+* Body grid (toggle with the checkbox or `G`): a polar grid in the equatorial plane of the
+  focused body, or, when a spacecraft is focused, of its reference body (the smallest sphere
+  of influence containing it). Rings are distances from the body's centre in km, at powers of
+  ten that follow the zoom. Spokes are every 30°, with the equator's ascending node on the
+  ecliptic highlighted in teal (the vernal equinox ♈ for Earth), and an axis marks the north
+  pole. The grid fades out as the camera leaves the sphere of influence, so the Sun has none.
 * Spacecraft trails (toggle with the checkbox or `T`): each craft's recorded trajectory,
   drawn around its reference body's current position and fading with age. `viz_server.py`
   keeps a cached copy that it updates incrementally, so the sim's load doesn't grow with the

@@ -893,6 +893,7 @@ class Simulation:
             "pole": _list(b.pole),
             "rotation_period": (2.0 * math.pi / b.spin_rate) if b.spin_rate else None,
             "has_atmosphere": b.atmosphere is not None,
+            "sphere_of_influence": float(self.soi[b.index]) if np.isfinite(self.soi[b.index]) else None,
         }
 
     def spacecraft_state(self, sc_id, relative_to=None):

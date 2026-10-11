@@ -9,6 +9,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/OrbitControls.js';
+import { BodyGrid } from './bodygrid.js';
 import { EclipticOverlay } from './ecliptic.js';
 import { TrailRenderer } from './trails.js';
 
@@ -204,11 +205,13 @@ const ui = {
   panel: document.getElementById('panel'),
   panelToggle: document.getElementById('panel-toggle'),
   eclipticToggle: document.getElementById('toggle-ecliptic'),
+  bodyGridToggle: document.getElementById('toggle-body-grid'),
   trailsToggle: document.getElementById('toggle-trails'),
 };
 
 // Overlays; each on/off choice is remembered per browser.
 const ecliptic = new EclipticOverlay(scene, labelLayer);
+const bodyGrid = new BodyGrid(scene, labelLayer);
 const trails = new TrailRenderer(scene, CRAFT_COLOR);
 
 function bindToggle(overlay, checkbox, prefKey) {
@@ -233,6 +236,7 @@ function bindToggle(overlay, checkbox, prefKey) {
 }
 
 const setEclipticEnabled = bindToggle(ecliptic, ui.eclipticToggle, 'viz.ecliptic');
+const setBodyGridEnabled = bindToggle(bodyGrid, ui.bodyGridToggle, 'viz.bodyGrid');
 const setTrailsEnabled = bindToggle(trails, ui.trailsToggle, 'viz.trails');
 
 // Ecliptic grid centre: the Sun, or the barycentre if there is no 'sun' body.
@@ -241,6 +245,16 @@ function eclipticCentreRel() {
   if (sun) return sun.rel;
   const f = objects.get(focusId);
   return f ? new THREE.Vector3(-f.abs[0] / KM, -f.abs[1] / KM, -f.abs[2] / KM) : new THREE.Vector3();
+}
+
+// Body grid: the focused body, or a focused craft's reference (sphere-of-influence) body.
+function bodyGridTarget() {
+  const f = objects.get(focusId);
+  if (!f) return null;
+  const b = f.kind === 'body' ? f : objects.get(f.data.trail?.reference_body ?? f.data.nearest_body.id);
+  if (!b || b.kind !== 'body') return null;
+  const soi = b.data.sphere_of_influence;
+  return { id: b.id, rel: b.rel, radiusKm: b.radiusKm, pole: b.pole, soiKm: soi == null ? Infinity : soi / KM };
 }
 
 function makeLabel(id, kind, color) {
@@ -445,6 +459,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === '-' || e.key === '_') zoomBy(1.25);
   else if (e.key === 'f' || e.key === 'F') setFocus(focusId);
   else if (e.key === 'e' || e.key === 'E') setEclipticEnabled(!ecliptic.enabled);
+  else if (e.key === 'g' || e.key === 'G') setBodyGridEnabled(!bodyGrid.enabled);
   else if (e.key === 't' || e.key === 'T') setTrailsEnabled(!trails.enabled);
 });
 
@@ -674,7 +689,8 @@ function frame() {
   if (latest) {
     updateBodyUniforms();
     updateLabels();
-    ecliptic.update({ camera, canvas, centreRel: eclipticCentreRel(), focusRadiusKm: focusRadiusKm() });
+    ecliptic.update({ camera, canvas, centreRel: eclipticCentreRel() });
+    bodyGrid.update({ camera, canvas, body: bodyGridTarget() });
     const r = focusRadiusKm();
     ui.range.textContent = fmtLen((camera.position.length() - r) * KM) + (r ? ' alt' : '');
   }

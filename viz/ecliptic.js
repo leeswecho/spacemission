@@ -3,9 +3,7 @@
 // * Sun-centred polar grid in the ecliptic plane (z = 0 of the J2000 ecliptic
 //   frame): rings at 0.1 / 1 / 10 AU that fade in and out with zoom, spokes
 //   every 30 deg, and the vernal-equinox direction (+X, 0 deg) highlighted.
-// * Local ecliptic ring around the focused object, parallel to the ecliptic,
-//   scaled to the camera distance, marking the equinox direction and ecliptic
-//   north.  It takes over from the Sun grid at close range.
+//   It fades out at close range, where the body grid (bodygrid.js) takes over.
 //
 // Units are km in the floating-origin scene used by app.js.
 
@@ -18,7 +16,7 @@ const ACCENT_COLOR = '#4fd1c5';
 const RING_LABELS_AU = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 30, 40, 50];
 const RING_LABEL_ANGLE = THREE.MathUtils.degToRad(225);
 // Camera range (distance to the focused object's centre) over which the Sun
-// grid fades in and the local ring fades out.
+// grid fades in.
 const FADE_START_AU = 0.002;
 const FADE_END_AU = 0.02;
 
@@ -74,10 +72,6 @@ void main() {
   gl_FragColor = vec4(col, a);
 }`;
 
-function lineMaterial(color) {
-  return new THREE.LineBasicMaterial({ color, transparent: true, depthWrite: false });
-}
-
 export class EclipticOverlay {
   constructor(scene, labelLayer) {
     this.enabled = true;
@@ -104,34 +98,6 @@ export class EclipticOverlay {
     this.grid.renderOrder = 1;
     scene.add(this.grid);
 
-    // Local ring (unit radius, scaled each frame).
-    this.local = new THREE.Group();
-    this.local.renderOrder = 1;
-    const circle = [];
-    for (let i = 0; i < 256; i++) {
-      const a = (i / 256) * Math.PI * 2;
-      circle.push(new THREE.Vector3(Math.cos(a), Math.sin(a), 0));
-    }
-    const ticks = [];
-    for (let deg = 30; deg < 360; deg += 30) {
-      const a = THREE.MathUtils.degToRad(deg);
-      ticks.push(new THREE.Vector3(0.92 * Math.cos(a), 0.92 * Math.sin(a), 0),
-        new THREE.Vector3(Math.cos(a), Math.sin(a), 0));
-    }
-    this.localMaterials = [lineMaterial(GRID_COLOR), lineMaterial(GRID_COLOR), lineMaterial(ACCENT_COLOR),
-      lineMaterial(GRID_COLOR)];
-    const [mCircle, mTicks, mEquinox, mPole] = this.localMaterials;
-    this.local.add(
-      new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(circle), mCircle),
-      new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(ticks), mTicks),
-      new THREE.Line(new THREE.BufferGeometry().setFromPoints(
-        [new THREE.Vector3(0, 0, 0), new THREE.Vector3(1.15, 0, 0)]), mEquinox),
-      new THREE.Line(new THREE.BufferGeometry().setFromPoints(
-        [new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, 0.6)]), mPole),
-    );
-    for (const child of this.local.children) child.frustumCulled = false;
-    scene.add(this.local);
-
     // HTML labels.
     const mk = (text, cls = '') => {
       const el = document.createElement('div');
@@ -142,8 +108,6 @@ export class EclipticOverlay {
     };
     this.sunEquinoxLabel = mk('♈︎ 0°', 'accent');
     this.ringLabels = RING_LABELS_AU.map((r) => ({ r, el: mk(`${r} AU`) }));
-    this.localEquinoxLabel = mk('♈︎', 'accent');
-    this.localPoleLabel = mk('ecliptic N');
   }
 
   setEnabled(on) {
@@ -151,34 +115,21 @@ export class EclipticOverlay {
   }
 
   // centreRel: Sun position relative to the floating origin (km).
-  update({ camera, canvas, centreRel, focusRadiusKm }) {
-    const allLabels = [this.sunEquinoxLabel, this.localEquinoxLabel, this.localPoleLabel,
-      ...this.ringLabels.map((l) => l.el)];
+  update({ camera, canvas, centreRel }) {
+    const allLabels = [this.sunEquinoxLabel, ...this.ringLabels.map((l) => l.el)];
     if (!this.enabled) {
       this.grid.visible = false;
-      this.local.visible = false;
       for (const el of allLabels) el.style.display = 'none';
       return;
     }
 
     const range = camera.position.length();  // camera distance to the focus centre, km
     const sunAlpha = THREE.MathUtils.smoothstep(range / AU_KM, FADE_START_AU, FADE_END_AU);
-    const localAlpha = 1 - sunAlpha;
 
     // Sun grid.
     this.grid.visible = sunAlpha > 0.01;
     this.grid.position.copy(centreRel);
     this.grid.material.uniforms.uOpacity.value = sunAlpha;
-
-    // Local ring: radius follows the camera, but stays outside the focused body.
-    const ringR = Math.max(0.55 * range, 1.3 * focusRadiusKm);
-    this.local.visible = localAlpha > 0.01;
-    this.local.scale.setScalar(ringR);
-    const [mCircle, mTicks, mEquinox, mPole] = this.localMaterials;
-    mCircle.opacity = 0.55 * localAlpha;
-    mTicks.opacity = 0.55 * localAlpha;
-    mEquinox.opacity = 0.9 * localAlpha;
-    mPole.opacity = 0.7 * localAlpha;
 
     // Labels.
     const w = canvas.clientWidth;
@@ -227,9 +178,5 @@ export class EclipticOverlay {
       }
       if (s) last = s;
     }
-
-    const showLocal = localAlpha > 0.2 ? localAlpha : false;
-    place(this.localEquinoxLabel, new THREE.Vector3(1.15 * ringR, 0, 0), showLocal);
-    place(this.localPoleLabel, new THREE.Vector3(0, 0, 0.6 * ringR), showLocal);
   }
 }

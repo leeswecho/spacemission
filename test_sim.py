@@ -212,6 +212,8 @@ class PhysicsTests(unittest.TestCase):
         self.assertEqual(sim._reference_body(sim.bpos[earth] + [7e6, 0, 0], sim.bpos), earth)
         self.assertEqual(sim._reference_body(sim.bpos[luna] + [2e6, 0, 0], sim.bpos), luna)
         self.assertEqual(sim._reference_body(sim.bpos[earth] + [5e9, 0, 0], sim.bpos), sun)
+        self.assertIsNone(sim.body_state("sun")["sphere_of_influence"])
+        self.assertAlmostEqual(sim.body_state("earth")["sphere_of_influence"] / 9.25e8, 1.0, delta=0.05)
 
     def test_trail_resting_and_staging(self):
         sim = Simulation(SCENARIO)
