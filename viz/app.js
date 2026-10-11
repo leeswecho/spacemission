@@ -10,6 +10,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/OrbitControls.js';
 import { BodyGrid } from './bodygrid.js';
+import { buildCraftModel, disposeModel } from './models.js';
 import { EclipticOverlay } from './ecliptic.js';
 import { TrailRenderer } from './trails.js';
 
@@ -217,6 +218,44 @@ function applyBodyTexture(id, mesh) {
 
 const craftGeometry = new THREE.SphereGeometry(1, 20, 14);
 
+// A craft's model (see models.js), or a true-scale sphere of its reference diameter.
+function craftMesh(s) {
+  const built = buildCraftModel(s.model);
+  if (built) {
+    const holder = new THREE.Group();  // +Y = nose; app.js turns it along the direction of travel
+    holder.add(built.object);
+    holder.scale.setScalar(1 / KM);
+    holder.userData.length = built.length;
+    return holder;
+  }
+  // Partly self-lit so craft stay visible on a body's night side.
+  const mat = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, emissive: 0x6a4a28, roughness: 0.6 });
+  const mesh = new THREE.Mesh(craftGeometry, mat);
+  const radiusM = Math.max(Math.sqrt((s.reference_area || 0) / Math.PI), 0.5);
+  mesh.scale.setScalar(radiusM / KM);
+  mesh.userData.length = 2 * radiusM;
+  return mesh;
+}
+
+const MODEL_UP = new THREE.Vector3(0, 1, 0);
+
+// Point the model along its velocity relative to the nearest body: surface-relative low down,
+// blending to the non-rotating (orbital) velocity between 50 and 150 km.  At rest it stands
+// radially outward from the body.
+function orientCraft(o, state) {
+  const s = o.data;
+  const nb = s.nearest_body;
+  const body = (state.bodies || []).find((b) => b.id === nb.id);
+  if (!body) return;
+  const radial = new THREE.Vector3(...sub(s.position, body.position)).normalize();
+  const surf = new THREE.Vector3(...nb.surface_relative_velocity);
+  const orbital = new THREE.Vector3(...sub(s.velocity, body.velocity));
+  const w = THREE.MathUtils.smoothstep(nb.altitude, 50e3, 150e3);
+  const v = surf.multiplyScalar(1 - w).addScaledVector(orbital, w);
+  const dir = v.length() > 1.0 ? v.normalize() : radial;
+  o.mesh.quaternion.setFromUnitVectors(MODEL_UP, dir);
+}
+
 // ---------------------------------------------------------------------------
 // Object registry
 // ---------------------------------------------------------------------------
@@ -364,30 +403,38 @@ function syncObjects(state) {
     seen.add(s.id);
     let o = objects.get(s.id);
     if (!o) {
-      // Partly self-lit so craft stay visible on a body's night side.
-      const mat = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, emissive: 0x6a4a28, roughness: 0.6 });
       o = {
         id: s.id, kind: 'craft', color: CRAFT_COLOR,
-        mesh: new THREE.Mesh(craftGeometry, mat),
+        mesh: null,
+        modelKey: null,
         label: makeLabel(s.id, 'craft', CRAFT_COLOR),
         li: makeListItem(ui.craftList, s.id, CRAFT_COLOR),
         rel: new THREE.Vector3(),
       };
-      scene.add(o.mesh);
       objects.set(s.id, o);
     }
     o.data = s;
     o.abs = s.position;
-    // True-scale sphere with the craft's reference diameter (at least 1 m).
-    const radiusM = Math.max(Math.sqrt((s.reference_area || 0) / Math.PI), 0.5);
     o.radiusKm = 0;
-    o.mesh.scale.setScalar(radiusM / KM);
+    const key = JSON.stringify(s.model ?? null) + s.reference_area;
+    if (key !== o.modelKey) {  // new craft, or its make-up changed (e.g. after staging)
+      if (o.mesh) {
+        scene.remove(o.mesh);
+        disposeModel(o.mesh);
+      }
+      o.modelKey = key;
+      o.mesh = craftMesh(s);
+      o.lengthKm = (o.mesh.userData.length ?? 1) / KM;
+      scene.add(o.mesh);
+    }
+    orientCraft(o, state);
   }
 
   for (const [id, o] of objects) {
     if (seen.has(id)) continue;
     scene.remove(o.mesh);
     if (o.kind === 'body') o.mesh.material.dispose();
+    else disposeModel(o.mesh);
     o.label.remove();
     o.li.remove();
     objects.delete(id);
@@ -459,7 +506,7 @@ function setFocus(id, distanceKm) {
     if (east.lengthSq() < 1e-12) east = new THREE.Vector3(1, 0, 0);
     east.normalize();
     dir = east.multiplyScalar(-1).addScaledVector(up, 0.35);
-    dist = distanceKm ?? 0.25;
+    dist = distanceKm ?? Math.max(0.25, 2.5 * (o.lengthKm ?? 0));
   }
   camera.up.copy(up);
   camera.position.copy(dir.normalize().multiplyScalar(dist));

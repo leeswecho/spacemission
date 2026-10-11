@@ -407,6 +407,9 @@ class MeoMission:
         self.pending_events = []
         self.phase_keys = [k for k, _ in phases_for(self.cfg)]
         self.phase_index = -1
+        # What the vehicle craft is made of, for the viewer's model tag.
+        self.parts = ((["boosters"] if self.b else []) + ["core", "upper"]
+                      + (["fairing"] if self.fairing_on else []) + ["payload"])
 
     # -- sim plumbing ---------------------------------------------------------
 
@@ -534,6 +537,18 @@ class MeoMission:
         thr = max(0.0, min(thr, (G_LIMIT * m - t_b) / t_core))
         return t_b + thr * t_core, -(mdot_b + thr * core["mdot"])
 
+    def _model(self, parts):
+        """Model tag for a craft made of these parts (see viz/models.js)."""
+        tag = {"vehicle": self.cfg["key"], "parts": list(parts)}
+        if "boosters" in parts:
+            tag["boosters"] = self.b["count"]
+        return tag
+
+    def _drop_parts(self, *gone):
+        """Remove parts from the vehicle; returns the model tag for what remains."""
+        self.parts = [p for p in self.parts if p not in gone]
+        return self._model(self.parts)
+
     def _reapply_thrust(self):
         if self.last_thrust:
             self.sim.set_thrust(self.vehicle, *self.last_thrust)
@@ -544,9 +559,10 @@ class MeoMission:
         f = self.cfg["fairing"]
         side = unit(np.cross(unit(v), unit(r)))
         self.sim.stage(self.vehicle, [
-            {"id": FAIRING_ID, "mass": f, "dry_mass": f, "delta_v": list(2.0 * side)},
+            {"id": FAIRING_ID, "mass": f, "dry_mass": f, "delta_v": list(2.0 * side),
+             "model": self._model(["fairing"])},
             {"id": self.vehicle, "mass": sc["mass"] - f, "dry_mass": max(0.0, sc["dry_mass"] - f),
-             "delta_v": [0.0, 0.0, 0.0]},
+             "delta_v": [0.0, 0.0, 0.0], "model": self._drop_parts("fairing")},
         ], frame="inertial")
         self.fairing_on = False
         self._reapply_thrust()  # staging resets thrust on the new craft
@@ -656,6 +672,7 @@ class MeoMission:
         self.sim.add_spacecraft({
             "id": self.vid, "mass": mass, "dry_mass": mass - prop,
             "reference_area": lv.stack_area(cfg), "drag_coefficient": lv.CD_TABLE,
+            "model": self._model(self.parts),
             "initial_state": {"frame": "surface", "body": "earth", "latitude": LAUNCH_LATITUDE,
                               "longitude": LAUNCH_LONGITUDE, "altitude": 0.0},
         })
@@ -755,9 +772,11 @@ class MeoMission:
         vhat = unit(v)
         self.sim.stage(self.vehicle, [
             {"id": self.boosters_id, "mass": mass, "dry_mass": mass,
-             "reference_area": n * lv.area(b["diameter"]), "delta_v": list(-1.0 * vhat)},
+             "reference_area": n * lv.area(b["diameter"]), "delta_v": list(-1.0 * vhat),
+             "model": self._model(["boosters"])},
             {"id": self.vid, "mass": sc["mass"] - mass, "dry_mass": sc["dry_mass"] - n * b["dry"],
-             "reference_area": lv.area(self.cfg["diameter"]), "delta_v": [0.0, 0.0, 0.0]},
+             "reference_area": lv.area(self.cfg["diameter"]), "delta_v": [0.0, 0.0, 0.0],
+             "model": self._drop_parts("boosters")},
         ], frame="inertial")
         self.stage = "core"
         self._reapply_thrust()
@@ -779,10 +798,10 @@ class MeoMission:
         u = self.cfg["upper"]
         self.sim.stage(self.vehicle, [
             {"id": self.s1_id, "mass": s1_mass, "dry_mass": min(self.cfg["core"]["dry"], s1_mass),
-             "delta_v": list(-1.0 * vhat)},
+             "delta_v": list(-1.0 * vhat), "model": self._model(["core"])},
             {"id": self.vid, "mass": upper,
              "dry_mass": u["dry"] + self.payload + (self.cfg["fairing"] if self.fairing_on else 0.0),
-             "delta_v": list(0.5 * vhat)},
+             "delta_v": list(0.5 * vhat), "model": self._drop_parts("core", "boosters")},
         ], frame="inertial")
         self.stage = "upper"
         self.log("Stage separation: first stage released.")
@@ -1045,10 +1064,10 @@ class MeoMission:
         u_dry = self.cfg["upper"]["dry"]
         self.sim.stage(self.vehicle, [
             {"id": PAYLOAD_ID, "mass": self.payload or 1.0, "dry_mass": self.payload or 1.0,
-             "delta_v": [0.0, 0.0, 0.0], "drag_coefficient": None},
+             "delta_v": [0.0, 0.0, 0.0], "drag_coefficient": None, "model": self._model(["payload"])},
             # The spent stage backs away so the payload keeps the orbit it was given.
             {"id": self.vid, "mass": max(sc["mass"] - self.payload, u_dry),
-             "dry_mass": u_dry, "delta_v": list(-0.5 * vhat)},
+             "dry_mass": u_dry, "delta_v": list(-0.5 * vhat), "model": self._drop_parts("payload")},
         ], frame="inertial")
         self.vehicle = PAYLOAD_ID
         self.log("Payload separated.")

@@ -104,6 +104,7 @@ spacecraft:
       - [0, 0.30]
       - [340, 0.55]
     contact: {...}                # optional per-craft override of body contact values
+    model: {vehicle: falcon9, parts: [core, upper, fairing]}  # optional, for viewers (any JSON object)
     initial_state:                # one of three frames:
       frame: surface              # lat/lon/alt on a body, co-rotating
       body: earth
@@ -140,8 +141,8 @@ Vectors are `[x, y, z]` lists.
 
 **`stage` children**: each child has `id` and `mass`, and optionally `delta_v` (velocity
 relative to the parent, in `frame`), `frame`, `body`, `dry_mass`, `reference_area`,
-`drag_coefficient` (`null` removes it) and `contact`. Area, Cd table and contact are inherited
-from the parent unless given. Children start at the parent's position with no thrust. The
+`drag_coefficient` (`null` removes it), `contact` and `model`. Area, Cd table, contact and
+model are inherited from the parent unless given. Children start at the parent's position with no thrust. The
 parent id may be reused by one child. Mass conservation is not enforced.
 
 **Events** in a `step` reply are `engine_cutoff`, `contact_start` and `contact_end`, each
@@ -223,7 +224,13 @@ offline.
   to 4096 × 2048 (about 1.2 MB). It is public domain, courtesy of NASA Earth Observatory.
   Other bodies keep a flat colour; the `BODY_TEXTURES` table in `viz/app.js` maps a body id
   to an image.
-* Spacecraft are spheres sized to their reference diameter.
+* Spacecraft are drawn as simple true-size models built in `viz/models.js`: core, boosters,
+  upper stage, ogive fairing (two half shells once jettisoned) and a satellite with solar
+  panels, in each rocket's colours. The craft's `model` tag says which rocket and which parts
+  it is made of. A model points along its velocity relative to the nearest body: the
+  surface-relative velocity low down, blending to the orbital velocity between 50 and 150 km.
+  A craft at rest stands radially outward from the body. A craft without a recognised tag is
+  a sphere of its reference diameter.
 * Ecliptic grid (toggle with the panel checkbox or `E`; the choice is remembered per browser):
   a polar grid in the ecliptic plane centred on the Sun. Rings at 0.1 / 1 / 10 AU appear as
   you zoom and carry AU labels. Spokes are every 30°, and the vernal-equinox direction (♈,

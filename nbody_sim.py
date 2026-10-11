@@ -268,7 +268,7 @@ def _parse_contact(c, what):
 
 class Spacecraft:
     def __init__(self, sc_id, position, velocity, mass, dry_mass=0.0, reference_area=0.0,
-                 cd_table=None, contact=None):
+                 cd_table=None, contact=None, model=None):
         self.id = sc_id
         self.pos = np.array(position, dtype=float)
         self.vel = np.array(velocity, dtype=float)
@@ -277,6 +277,7 @@ class Spacecraft:
         self.reference_area = reference_area
         self.cd_table = cd_table
         self.contact = contact  # optional per-craft override (dict of partial values)
+        self.model = model      # optional free-form description for viewers (JSON object)
         self.in_contact = set()
         self.trail = Trail()
         self.sleep = None       # (body index, position in body-fixed axes) while asleep
@@ -346,6 +347,9 @@ class Trail:
         self.version = next(_TRAIL_VERSIONS)
 
 
+MAX_MODEL_JSON = 4096
+
+
 def _parse_spacecraft_props(spec, what, inherit=None):
     """Mass, dry mass, area, Cd table and contact override for a spacecraft spec."""
     inherit = inherit or {}
@@ -362,13 +366,20 @@ def _parse_spacecraft_props(spec, what, inherit=None):
         cd_table = inherit.get("cd_table")
     if cd_table is not None and area <= 0:
         raise SimError(f"{what}: reference_area must be > 0 when drag_coefficient is given")
+    model = spec["model"] if "model" in spec else inherit.get("model")
+    if model is not None:
+        if not isinstance(model, dict):
+            raise SimError(f"{what}: model must be an object or null")
+        if len(json.dumps(model)) > MAX_MODEL_JSON:
+            raise SimError(f"{what}: model is larger than {MAX_MODEL_JSON} bytes of JSON")
     contact = inherit.get("contact")
     if spec.get("contact") is not None:
         c = dict(DEFAULT_CONTACT)
         c.update(spec["contact"])
         _parse_contact(c, what)  # validation only
         contact = {k: float(v) for k, v in spec["contact"].items() if k in DEFAULT_CONTACT}
-    return dict(mass=mass, dry_mass=dry_mass, reference_area=area, cd_table=cd_table, contact=contact)
+    return dict(mass=mass, dry_mass=dry_mass, reference_area=area, cd_table=cd_table, contact=contact,
+                model=model)
 
 
 # ----------------------------------------------------------------------------
@@ -872,7 +883,7 @@ class Simulation:
                 raise SimError(f"{what}: id '{cid}' is already in use")
             ids.add(cid)
             inherit = {"dry_mass": 0.0, "reference_area": parent.reference_area,
-                       "cd_table": parent.cd_table, "contact": parent.contact}
+                       "cd_table": parent.cd_table, "contact": parent.contact, "model": parent.model}
             props = _parse_spacecraft_props(spec, what, inherit)
             dv = _vec3(spec.get("delta_v", [0.0, 0.0, 0.0]), f"{what} delta_v")
             c_frame, c_body = self._parse_frame(spec.get("frame", frame), spec.get("body", body))
@@ -933,6 +944,7 @@ class Simulation:
             "mass": sc.mass,
             "dry_mass": sc.dry_mass,
             "reference_area": sc.reference_area,
+            "model": sc.model,
             "position": _list(sc.pos - p0),
             "velocity": _list(sc.vel - v0),
             "thrust": {

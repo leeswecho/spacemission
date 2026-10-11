@@ -1,0 +1,215 @@
+// Simple procedural spacecraft models, built from a craft's `model` tag.
+//
+// The tag comes from the simulation (set by the scenario or the mission autopilot):
+//   { vehicle: 'vulcan', parts: ['boosters', 'core', 'upper', 'fairing', 'payload'], boosters: 4 }
+// `parts` lists what the craft is made of; separated pieces carry just their own part
+// (e.g. { vehicle: 'vulcan', parts: ['core'] } for the spent first stage).
+//
+// Models are true size, built in metres with +Y pointing toward the nose and the base of the
+// lowest part at the origin (a lone payload is centred instead).  app.js scales them to km
+// and turns +Y along the direction of travel.  Dimensions are approximate.
+
+import * as THREE from 'three';
+
+const WHITE = 0xeeeeee;
+const BLACK = 0x2a2a2a;
+const ENGINE = 0x3a3a3f;
+const FOIL = 0xc9a24a;
+const PANEL = 0x24365e;
+
+// Per vehicle: diameter d and length l in metres.  Boosters are per booster.
+const VEHICLES = {
+  falcon9: {
+    core: { d: 3.66, l: 42.6, color: WHITE, band: BLACK },
+    upper: { d: 3.66, l: 13.8, color: WHITE },
+    fairing: { d: 5.2, l: 13.1 },
+  },
+  atlas_v_551: {
+    core: { d: 3.81, l: 32.5, color: 0xd28b52 },
+    boosters: { d: 1.58, l: 20.0, color: WHITE, nose: 2.5 },
+    upper: { d: 3.05, l: 12.7, color: 0xc4c8cc },
+    fairing: { d: 5.4, l: 23.4, coversUpper: true },
+  },
+  vulcan: {
+    core: { d: 5.4, l: 33.3, color: 0xc98a4f },
+    boosters: { d: 1.6, l: 22.0, color: WHITE, nose: 2.5 },
+    upper: { d: 5.4, l: 11.7, color: 0xd9dcdf },
+    fairing: { d: 5.4, l: 15.5 },
+  },
+  delta_iv_heavy: {
+    core: { d: 5.1, l: 40.8, color: 0xd9782e },
+    boosters: { d: 5.1, l: 40.8, color: 0xd9782e, nose: 1.4 },
+    upper: { d: 4.0, l: 13.7, color: WHITE, flare: 5.1 },
+    fairing: { d: 5.1, l: 19.1 },
+  },
+  new_glenn: {
+    core: { d: 7.0, l: 57.5, color: WHITE, band: 0x1d2b4a },
+    upper: { d: 7.0, l: 23.4, color: WHITE },
+    fairing: { d: 7.0, l: 21.9 },
+  },
+  sls: {
+    core: { d: 8.4, l: 64.6, color: 0xc8692b },
+    boosters: { d: 3.71, l: 54.0, color: WHITE, nose: 1.8 },
+    upper: { d: 5.0, l: 13.7, color: WHITE, flare: 8.4 },
+    fairing: null,
+  },
+};
+
+function material(color) {
+  const c = new THREE.Color(color);
+  // A little self-illumination keeps craft visible on a body's night side.
+  return new THREE.MeshStandardMaterial({
+    color: c, emissive: c.clone().multiplyScalar(0.12), roughness: 0.6, metalness: 0.15,
+  });
+}
+
+function cylinder(d, l, color, y0, segments = 24) {
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(d / 2, d / 2, l, segments), material(color));
+  m.position.y = y0 + l / 2;
+  return m;
+}
+
+function cone(dBase, dTop, l, color, y0, segments = 24) {
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(dTop / 2, dBase / 2, l, segments), material(color));
+  m.position.y = y0 + l / 2;
+  return m;
+}
+
+// Ogive nose cone (booster nose): cylinder for `straight` metres, then a tangent ogive.
+function ogive(d, l, straight, color, y0) {
+  const m = new THREE.Mesh(ogiveGeometry(d, l, straight, 2 * Math.PI), material(color));
+  m.position.y = y0;
+  return m;
+}
+
+function coreStage(v, group, y0) {
+  const c = v.core;
+  group.add(cylinder(c.d, c.l, c.color, y0));
+  group.add(cylinder(c.d * 1.01, 1.6, ENGINE, y0));                    // engine section
+  if (c.band) group.add(cylinder(c.d * 1.01, c.l * 0.08, c.band, y0 + c.l * 0.92));  // interstage
+  return y0 + c.l;
+}
+
+function boosterRing(v, count, group, y0) {
+  const b = v.boosters;
+  const offset = v.core.d / 2 + b.d / 2 + 0.1;
+  for (let i = 0; i < count; i++) {
+    const a = (i / count) * Math.PI * 2 + Math.PI / 2;
+    const g = new THREE.Group();
+    g.add(cylinder(b.d, b.l - b.nose * b.d, b.color, 0, 16));
+    g.add(ogive(b.d, b.nose * b.d, 0, b.color, b.l - b.nose * b.d));
+    g.add(cone(b.d * 0.8, b.d * 0.5, 1.2, ENGINE, -1.2, 16));          // nozzle
+    g.position.set(Math.cos(a) * offset, y0 + 1.2, Math.sin(a) * offset);
+    group.add(g);
+  }
+}
+
+function upperStage(v, group, y0, nozzle) {
+  const u = v.upper;
+  let y = y0;
+  if (u.flare) {  // adapter from a wider stage below
+    group.add(cone(u.flare, u.d, 2.5, u.color, y));
+    y += 2.5;
+  }
+  group.add(cylinder(u.d, u.l - (y - y0), u.color, y));
+  if (nozzle) group.add(cone(u.d * 0.55, u.d * 0.2, u.d * 0.6, ENGINE, y0 - u.d * 0.6));
+  return y0 + u.l;
+}
+
+function fairing(v, group, y0, split) {
+  const f = v.fairing;
+  const straight = f.l * 0.55;
+  const halves = new THREE.Group();
+  if (split) {
+    // A jettisoned fairing: two half shells drifting apart.
+    for (const side of [-1, 1]) {
+      const mat = material(WHITE);
+      mat.side = THREE.DoubleSide;
+      const m = new THREE.Mesh(ogiveGeometry(f.d, f.l, straight, Math.PI), mat);
+      m.rotation.y = side > 0 ? 0 : Math.PI;
+      m.position.z = side * 1.5;
+      halves.add(m);
+    }
+  } else {
+    halves.add(new THREE.Mesh(ogiveGeometry(f.d, f.l, straight, 2 * Math.PI), material(WHITE)));
+  }
+  halves.position.y = y0;
+  group.add(halves);
+  return y0 + f.l;
+}
+
+// Lathe of a cylinder (`straight` metres) topped by a tangent ogive; `sweep` < 2 pi gives a
+// partial shell centred on +Z.
+function ogiveGeometry(d, l, straight, sweep) {
+  const r = d / 2;
+  const h = l - straight;
+  const rho = (r * r + h * h) / (2 * r);
+  const pts = [new THREE.Vector2(0, 0), new THREE.Vector2(r, 0), new THREE.Vector2(r, straight)];
+  for (let i = 1; i <= 12; i++) {
+    const x = (h * i) / 12;
+    pts.push(new THREE.Vector2(Math.max(0, Math.sqrt(rho * rho - x * x) + r - rho), straight + x));
+  }
+  return new THREE.LatheGeometry(pts, sweep < 6 ? 16 : 32, -sweep / 2, sweep);
+}
+
+function satellite(group, y0) {
+  const bus = new THREE.Mesh(new THREE.BoxGeometry(2.4, 3.2, 2.4), material(FOIL));
+  bus.position.y = y0 + 1.6;
+  group.add(bus);
+  for (const side of [-1, 1]) {
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(7.0, 0.08, 2.0), material(PANEL));
+    panel.position.set(side * (1.2 + 0.6 + 3.5), y0 + 1.6, 0);
+    group.add(panel);
+    const boom = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.6, 6), material(WHITE));
+    boom.rotation.z = Math.PI / 2;
+    boom.position.set(side * 1.5, y0 + 1.6, 0);
+    group.add(boom);
+  }
+  const dish = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.2, 0.4, 20), material(WHITE));
+  dish.position.y = y0 + 3.4;
+  group.add(dish);
+  return y0 + 3.6;
+}
+
+// Returns {object, length} (metres), or null if the tag isn't recognised.
+export function buildCraftModel(tag) {
+  const v = VEHICLES[tag?.vehicle];
+  const parts = new Set(Array.isArray(tag?.parts) ? tag.parts : []);
+  if (!parts.size) return null;
+  const group = new THREE.Group();
+
+  if (parts.size === 1 && parts.has('payload')) {
+    const top = satellite(group, 0);
+    group.position.y = -top / 2;  // centred
+    const outer = new THREE.Group();
+    outer.add(group);
+    return { object: outer, length: top };
+  }
+  if (!v) return null;
+
+  let y = 0;
+  if (parts.has('core')) {
+    if (parts.has('boosters') && v.boosters) boosterRing(v, tag.boosters ?? 0, group, 0);
+    y = coreStage(v, group, 0);
+  } else if (parts.has('boosters') && v.boosters) {
+    boosterRing(v, tag.boosters ?? 1, group, 0);
+    y = v.boosters.l;
+  }
+  const upperBase = y;
+  if (parts.has('upper')) y = upperStage(v, group, y, !parts.has('core'));
+  const fairingOn = parts.has('fairing') && v.fairing;
+  if (parts.has('payload') && !fairingOn) y = satellite(group, y);
+  if (fairingOn) {
+    const alone = parts.size === 1;
+    const base = alone ? 0 : (v.fairing.coversUpper && parts.has('upper') ? upperBase : y);
+    y = Math.max(y, fairing(v, group, base, alone));
+  }
+  return { object: group, length: y };
+}
+
+export function disposeModel(object) {
+  object.traverse((o) => {
+    if (o.geometry) o.geometry.dispose();
+    if (o.material) o.material.dispose();
+  });
+}

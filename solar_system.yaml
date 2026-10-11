@@ -235,6 +235,7 @@ spacecraft:
   # first-stage propellant, so the engine cuts off automatically at first-stage depletion.
   # Sea-level thrust ~7.6 MN, mass flow ~2750 kg/s.
   - id: falcon9
+    model: {vehicle: falcon9, parts: [core, upper, fairing]}   # for viewers (see viz/models.js)
     mass: 549054.0
     dry_mass: 153354.0
     reference_area: 10.52             # m^2, 3.66 m diameter

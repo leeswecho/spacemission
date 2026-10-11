@@ -362,6 +362,19 @@ class SleepAndMassTest(unittest.TestCase):
         with self.assertRaises(SimError):
             sim.remove_spacecraft("probe")
 
+    def test_model_tag(self):
+        sim = Simulation(SCENARIO)
+        self.assertEqual(sim.spacecraft_state("falcon9")["model"]["vehicle"], "falcon9")
+        sim.stage("falcon9", [{"id": "s1", "mass": 1000.0, "model": {"parts": ["core"]}},
+                              {"id": "falcon9", "mass": 1000.0}])
+        self.assertEqual(sim.spacecraft_state("s1")["model"], {"parts": ["core"]})
+        self.assertEqual(sim.spacecraft_state("falcon9")["model"]["parts"], ["core", "upper", "fairing"])  # inherited
+        sim.stage("falcon9", [{"id": "a", "mass": 10.0, "model": None}, {"id": "b", "mass": 10.0}])
+        self.assertIsNone(sim.spacecraft_state("a")["model"])
+        for bad in ("rocket", {"x": "y" * 5000}):
+            with self.assertRaises(SimError):
+                sim.stage("b", [{"id": "c", "mass": 1.0, "model": bad}, {"id": "d", "mass": 1.0}])
+
 
 class MeoAutopilotTest(unittest.TestCase):
     def test_validation(self):
@@ -463,7 +476,15 @@ class MeoAutopilotTest(unittest.TestCase):
             self.assertTrue(all(p["state"] == "done" for p in snap["phases"]))
             r = snap["result"]
             self.assertEqual(r["craft"], "payload")
-            self.assertEqual(sorted(SimClient(endpoint, timeout_ms=5000).info()["spacecraft"]), ids)
+            client = SimClient(endpoint, timeout_ms=5000)
+            self.assertEqual(sorted(client.info()["spacecraft"]), ids)
+            # Every piece carries a model tag describing what it is.
+            parts = {i: client.get_spacecraft(i)["model"]["parts"] for i in ids}
+            self.assertEqual(parts["payload"], ["payload"])
+            self.assertEqual(parts[vehicle], ["upper"])
+            self.assertEqual(parts[f"{vehicle}_s1"], ["core"])
+            self.assertEqual(parts["fairing"], ["fairing"])
+            client.close()
             self.assertLess(abs(r["errors"]["perigee_km"]), 50)
             self.assertLess(abs(r["errors"]["apogee_km"]), 50)
             self.assertLess(abs(r["errors"]["inclination_deg"]), 0.5)
