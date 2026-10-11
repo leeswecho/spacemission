@@ -343,6 +343,25 @@ class SleepAndMassTest(unittest.TestCase):
         with self.assertRaises(SimError):
             sim.set_mass("falcon9", -5.0)
 
+    def test_add_and_remove_spacecraft(self):
+        sim = Simulation(SCENARIO)
+        spec = {"id": "probe", "mass": 1000.0, "reference_area": 2.0, "drag_coefficient": [[0, 0.5]],
+                "initial_state": {"frame": "surface", "body": "earth", "latitude": 0.0, "longitude": 0.0,
+                                  "altitude": 0.0}}
+        self.assertEqual(sim.add_spacecraft(spec), "probe")
+        st = sim.spacecraft_state("probe")
+        self.assertAlmostEqual(st["nearest_body"]["altitude"], 0.0, delta=1e-3)
+        self.assertEqual(st["trail"]["points"], 1)
+        with self.assertRaises(SimError):
+            sim.add_spacecraft(spec)  # duplicate id
+        with self.assertRaises(SimError):
+            sim.add_spacecraft({**spec, "id": "earth"})
+        sim.step(5.0)
+        self.assertEqual(sim.remove_spacecraft("probe"), "probe")
+        self.assertNotIn("probe", sim.spacecraft)
+        with self.assertRaises(SimError):
+            sim.remove_spacecraft("probe")
+
 
 class MeoAutopilotTest(unittest.TestCase):
     def test_validation(self):
@@ -350,13 +369,34 @@ class MeoAutopilotTest(unittest.TestCase):
         ok = {"perigee_km": 20180, "apogee_km": 20180, "inclination_deg": 55, "payload_kg": 4300, "pace": "max"}
         params, errors, est = ap.validate(ok)
         self.assertEqual(errors, [])
+        self.assertEqual(params["vehicle"], "falcon9")
         self.assertGreater(est["margin"], 0)
-        self.assertTrue(5000 < est["max_payload"] < 5600)
+        self.assertTrue(4000 < est["max_payload"] < 6000)
+        for key in ap.lv.VEHICLES:
+            params, errors, est = ap.validate({**ok, "vehicle": key})
+            self.assertEqual(errors, [], key)
+            self.assertGreater(est["liftoff_tw"], 1.05, key)
         for bad in ({"perigee_km": 500}, {"apogee_km": 40000}, {"perigee_km": 25000},
-                    {"inclination_deg": 20}, {"payload_kg": -1}, {"payload_kg": "lots"}, {"pace": "warp"}):
+                    {"inclination_deg": 20}, {"payload_kg": -1}, {"payload_kg": "lots"}, {"pace": "warp"},
+                    {"vehicle": "saturn_v"},
+                    {"vehicle_config": {"core": {"thrust_sl": 9e6}}},             # sea level > vacuum
+                    {"vehicle_config": {"upper": {"mdot": 1.0}}},                 # Isp ~ 100,000 s
+                    {"vehicle_config": {"upper": {"prop": None}}},
+                    {"vehicle": "vulcan", "vehicle_config": {"boosters": {"count": 7}}},
+                    {"vehicle": "vulcan", "vehicle_config": {"boosters": {"count": 0}}},  # T/W < 1.05
+                    {"vehicle_config": {"kick_angle": 60}}):
             _, errors, est = ap.validate({**ok, **bad})
             self.assertTrue(errors, bad)
             self.assertIsNone(est)
+        # Edits apply on top of the catalog.
+        params, errors, _ = ap.validate({**ok, "vehicle": "atlas_v_551",
+                                         "vehicle_config": {"boosters": {"count": 2}, "fairing": 3500}})
+        self.assertEqual(errors, [])
+        cfg = params["vehicle_config"]
+        self.assertEqual((cfg["boosters"]["count"], cfg["fairing"]), (2, 3500.0))
+        self.assertEqual(cfg["core"], ap.lv.VEHICLES["atlas_v_551"]["core"])
+        self.assertIn("booster_sep", [k for k, _ in ap.phases_for(cfg)])
+        self.assertNotIn("booster_sep", [k for k, _ in ap.phases_for(ap.lv.configure("falcon9")[0])])
 
     def test_orbital_helpers(self):
         import meo_autopilot as ap
@@ -405,15 +445,15 @@ class MeoAutopilotTest(unittest.TestCase):
         self.assertLessEqual(max(sim.steps), 20.0 * ap.PACE_CHUNK + 1e-9)  # long steps were chunked
         self.assertAlmostEqual(sim.t, 30.5)
 
-    def test_gps_mission(self):
+    def fly(self, endpoint, vehicle, ids, **extra):
         import meo_autopilot as ap
         from sim_client import SimClient
 
-        endpoint = "tcp://127.0.0.1:5596"
         sim = subprocess.Popen([sys.executable, str(HERE / "nbody_sim.py"), str(SCENARIO), "--endpoint", endpoint])
         try:
-            params, errors, est = ap.validate({"perigee_km": 20180, "apogee_km": 20180, "inclination_deg": 55,
-                                               "payload_kg": 4300, "pace": "max", "reset": True})
+            params, errors, est = ap.validate({"vehicle": vehicle, "perigee_km": 20180, "apogee_km": 20180,
+                                               "inclination_deg": 55, "payload_kg": 4300, "pace": "max",
+                                               "reset": True, **extra})
             self.assertEqual(errors, [])
             status = ap.MissionStatus()
             status.begin(params, est)
@@ -423,14 +463,25 @@ class MeoAutopilotTest(unittest.TestCase):
             self.assertTrue(all(p["state"] == "done" for p in snap["phases"]))
             r = snap["result"]
             self.assertEqual(r["craft"], "payload")
-            ids = SimClient(endpoint, timeout_ms=5000).info()["spacecraft"]
-            self.assertEqual(sorted(ids), ["fairing", "falcon9", "falcon9_s1", "payload"])
+            self.assertEqual(sorted(SimClient(endpoint, timeout_ms=5000).info()["spacecraft"]), ids)
             self.assertLess(abs(r["errors"]["perigee_km"]), 50)
             self.assertLess(abs(r["errors"]["apogee_km"]), 50)
             self.assertLess(abs(r["errors"]["inclination_deg"]), 0.5)
+            return snap
         finally:
             sim.kill()
             sim.wait(timeout=10)
+
+    def test_gps_mission(self):
+        self.fly("tcp://127.0.0.1:5596", "falcon9", ["fairing", "falcon9", "falcon9_s1", "payload"])
+
+    def test_gps_mission_with_boosters(self):
+        # Vulcan replaces the scenario's Falcon 9 on the pad; boosters, first stage and
+        # fairing are released as their own craft and the upper stage keeps the vehicle ID.
+        snap = self.fly("tcp://127.0.0.1:5598", "vulcan",
+                        ["fairing", "payload", "vulcan", "vulcan_boosters", "vulcan_s1"])
+        self.assertTrue(any("Cleared 'falcon9'" in e["text"] for e in snap["log"]))
+        self.assertTrue(any(e["text"].startswith("Booster burnout") for e in snap["log"]))
 
 
 class MissionServerTest(unittest.TestCase):
@@ -469,9 +520,13 @@ class MissionServerTest(unittest.TestCase):
 
             good = {"perigee_km": 20180, "apogee_km": 20180, "inclination_deg": 55, "payload_kg": 4300,
                     "pace": "watch", "reset": True}
+            status, config = self.request("/api/config")
+            self.assertIn("sls", config["vehicles"])
             status, reply = self.request("/api/validate", good)
             self.assertTrue(reply["ok"])
             self.assertIn("margin", reply["estimate"])
+            status, reply = self.request("/api/validate", {**good, "vehicle": "delta_iv_heavy"})
+            self.assertIn("booster_sep", [p["key"] for p in reply["phases"]])
             status, reply = self.request("/api/start", {**good, "inclination_deg": 10})
             self.assertEqual(status, 400)
 

@@ -12,7 +12,7 @@ advances only when a client sends `step`.
 | `tools/generate_solar_system.py` | Regenerates `solar_system.yaml` (J2000 ephemeris) |
 | `test_sim.py` | Tests (`python -m unittest test_sim -v`) |
 | `viz_server.py`, `viz/` | Web 3D viewer of the live state (see below) |
-| `meo_mission_server.py`, `meo_autopilot.py`, `meo_mission/` | Mission page: fly the Falcon 9 to a medium Earth orbit (see below) |
+| `meo_mission_server.py`, `meo_autopilot.py`, `launch_vehicles.py`, `meo_mission/` | Mission page: launch a chosen rocket to a medium Earth orbit (see below) |
 
 Requirements: Python 3.9+, `numpy`, `pyyaml`, `pyzmq`.
 
@@ -133,6 +133,8 @@ Vectors are `[x, y, z]` lists.
 | `set_thrust` | `id`, `force` (N), `mass_rate` (kg/s, default 0), `frame` (`inertial` \| `enu`), `body` (required for `enu`) | — |
 | `stage` | `id`, `children` (list, ≥ 2), optional default `frame` / `body` | `removed`, `created` |
 | `get_trails` | optional `since` (`{id: [version, seq]}`), `ids` | `trails` (see below) |
+| `add_spacecraft` | `spacecraft`: a spec exactly like a scenario file's `spacecraft` entry | `spacecraft` (id) |
+| `remove_spacecraft` | `id` | `removed` |
 | `reset` | — | reloads the scenario file, t = 0 |
 | `shutdown` | — | server exits |
 
@@ -233,50 +235,81 @@ offline.
 * URL parameters: `?focus=<id>` sets the initial focus. `&dist=<km>` sets the initial camera
   distance from that object's centre.
 
-## Mission page: Falcon 9 to medium Earth orbit
+## Mission page: rocket to medium Earth orbit
 
 ```
 python meo_mission_server.py                # -> open http://127.0.0.1:8081/
 ```
 
-A page built for one mission. It reads as a questionnaire: perigee and apogee altitude, which
-must lie within MEO (2,000–35,786 km), inclination, payload mass, playback speed, and whether
-to reset the shared simulation first. There are presets for GPS, Galileo and GLONASS. As you
-type, the page validates the answers and shows a rough feasibility estimate: liftoff mass,
-the upper stage's Δv needed against Δv available, the margin, and the largest payload this
-orbit allows.
+A page built for one mission. It reads as a questionnaire:
+* **Rocket:** Falcon 9 Block 5, Atlas V 551, Vulcan Centaur VC4, Delta IV Heavy, New Glenn or
+  SLS Block 1 (`launch_vehicles.py`; approximate public figures).
+  * **Editable figures:** for every stage, dry mass, propellant, sea-level and vacuum thrust,
+    and propellant flow. Also the number of boosters, Delta IV Heavy's core throttle while
+    its side cores burn, the fairing mass and the pitch-kick angle. The page shows each
+    stage's Isp and burn time, and picking a rocket restores its defaults.
+* **Orbit:** perigee and apogee altitude, which must lie within MEO (2,000–35,786 km), and
+  the inclination. There are presets for GPS, Galileo and GLONASS.
+* **Payload mass, playback speed,** and whether to reset the shared simulation first.
+
+As you type, the page validates the answers. It also shows a rough feasibility estimate: liftoff mass and thrust-to-weight, the ideal Δv of each stage against the Δv needed (with about 1.7 km/s of ascent losses assumed), the margin, and the largest payload this orbit allows.
 
 **Launch** starts the autopilot (`meo_autopilot.py`) inside the mission server. It flies the
 mission with ordinary sim commands, so it keeps flying if the page is closed, and every open
 page sees the same flight. Only one mission runs at a time. The page shows the phase checklist,
 live telemetry, the flight log, and finally target against achieved orbit. **Abort** shuts the
-engine down immediately.
+engines down immediately.
 
 Flight profile:
-1. **Configure:** `set_mass` sets realistic Falcon 9 Block 5 masses (S1 25.6 t + 395.7 t
-   propellant, S2 3.9 t + 92.7 t, fairing 1.9 t) plus the payload.
-2. **First stage:** vertical rise, a 15° pitch kick at 60 m/s, then a gravity turn along the
-   launch azimuth for the target inclination (corrected for Earth's rotation). The stage burns
-   to depletion. MECO comes at about 78 km, with peak dynamic pressure around 45 kPa.
-3. **Separation:** the first stage and, above 110 km, the fairing are released as separate
-   spacecraft.
-4. **Second-stage ascent:** closed-loop guidance aims for a 200 km perigee in the target plane
-   and burns straight into a transfer orbit whose apogee is the target apogee.
-5. **Apogee:** the stage coasts to apogee, then burns to raise the perigee and trim the
+1. **Configure:** whatever stands on the LC-39A pad is removed (`remove_spacecraft`), and the
+   rocket is placed there with `add_spacecraft` under its own ID (`falcon9`, `atlas_v_551`,
+   `vulcan`, `delta_iv_heavy`, `new_glenn`, `sls`), its masses and its drag area.
+2. **Gravity turn:** vertical rise, a pitch kick at 60 m/s (per rocket, 4–15°), then a gravity
+   turn along the launch azimuth for the target inclination (corrected for Earth's rotation).
+   It lasts until 45 km, or earlier if the flight path gets shallower than 15°.
+3. **Boosters:** they burn alongside the first stage from liftoff and are released together at
+   burnout as `<id>_boosters`.
+4. **Closed-loop ascent:** every few seconds the guidance flies the rest of the burn in a 2D
+   predictor. That covers booster burnout, the first stage, the staging coast, the upper stage,
+   the fairing jettison and throttling. It then solves for a linear-tangent pitch program that
+   reaches 200 km with zero vertical speed exactly at the transfer orbit's perigee speed. The
+   velocity normal to the target plane is nulled at the same time.
+   * **Separations:** the first stage (`<id>_s1`) is released at depletion, and the fairing
+     above 110 km.
+   * **Throttling:** liquid stages throttle to stay under 4 g.
+5. **Transfer burn:** the ascent flows straight into a transfer orbit whose apogee is the target
+   apogee. A first stage that is still attached is dropped afterwards.
+6. **Apogee:** the upper stage coasts to apogee, then burns to raise the perigee and trim the
    inclination.
-6. **Payload separation:** the spent stage backs away, and the result is scored. Success means
-   within max(50 km, 1 %) on both altitudes and within 0.5° on inclination.
+7. **Payload separation:** the spent stage, which keeps the rocket's ID, backs away. The result
+   is then scored. Success means within max(50 km, 1 %) on both altitudes and within 0.5° on
+   inclination.
 
-Tested targets:
+Tested with a 4,300 kg payload to the GPS orbit (20,180 km circular, 55°), at default
+settings:
 
-| Orbit | Payload | Result |
+| Rocket | Result | Upper-stage propellant left |
 |---|---|---|
-| GPS (20,180 km circular, 55°) | 4,300 kg | within ~1 km and 0.04°, ~880 kg propellant left |
-| Galileo (23,222 km circular, 56°) | 1,500 kg | succeeds, ~3.3 t propellant left |
-| 2,000 × 30,000 km at 30° | 3,000 kg | succeeds |
-| 8,000 km circular at 28.7° (due east) | 4,000 kg | succeeds |
-| 10,000 × 15,000 km at 100° (retrograde) | 2,000 kg | succeeds |
-| GPS orbit | 5,600 kg | fails as the estimate predicts (about 100 m/s short) |
+| Falcon 9 | within ~1 km and 0.04° | ~950 kg |
+| Atlas V 551 | within ~0.4 km and 0.06° | ~1.6 t |
+| Vulcan VC4 | within ~0.3 km and 0.07° | ~4.5 t |
+| Delta IV Heavy | within ~0.7 km and 0.06° | ~4.3 t |
+| New Glenn | within ~0.3 km and 0.04° | ~3.2 t |
+| SLS Block 1 | within ~0.8 km and 0.08° | ~5.6 t |
+
+Also tested:
+* **Successful edits:**
+  * Vulcan with six boosters and 10 t of payload.
+  * Atlas V with no boosters (an "Atlas V 401") and 2 t.
+  * Delta IV Heavy with a 12° kick, and SLS with a 15° kick (both switch to closed-loop
+    guidance early).
+* **Expected failures:**
+  * Vulcan with no boosters is rejected before launch (liftoff thrust-to-weight below 1.05).
+  * SLS with 30 t runs out of propellant, as its guidance warns at booster separation.
+
+The Δv estimate is rough. It is fairly close for Falcon 9, Atlas V and New Glenn. It is
+optimistic for rockets whose first stage burns long and high, so for SLS it overstates the
+payload limit.
 
 Options: `--sim <endpoint>`, `--host`, `--port` (8081), `--timeout` (ms), `--viewer-url`.
 

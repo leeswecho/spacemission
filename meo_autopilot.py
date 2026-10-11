@@ -1,26 +1,33 @@
-"""Autopilot for the "Falcon 9 to MEO" mission.
+"""Autopilot for the "rocket to MEO" mission.
 
-Flies the Falcon 9 that starts on the pad in solar_system.yaml into a medium
-Earth orbit with a requested perigee, apogee and inclination, by sending
-ordinary commands (set_mass, set_thrust, stage, step, get_spacecraft) to a
-running nbody_sim over a SimClient.
+Launches a vehicle from launch_vehicles.py (Falcon 9, Atlas V 551, Vulcan,
+Delta IV Heavy, New Glenn, SLS, with any edited masses, thrusts and flows)
+from LC-39A into a medium Earth orbit with a requested perigee, apogee and
+inclination, by sending ordinary commands (add_spacecraft, set_thrust, stage,
+step, get_spacecraft, ...) to a running nbody_sim over a SimClient.
 
 Profile
 -------
-1. Configure: optional sim reset; set realistic Falcon 9 stage masses + payload.
+1. Configure: optional sim reset; clear the pad and place the configured
+   vehicle on it (its own ID, masses, drag area).
 2. Liftoff and vertical rise to 60 m/s.
 3. Pitch kick and gravity turn along the launch azimuth that gives the target
-   inclination (corrected for Earth's rotation); first stage burns to depletion.
-4. MECO and separation (first stage becomes debris).
-5. Second-stage closed-loop ascent to a 200 km parking altitude in the target
-   orbital plane; fairing jettison above 110 km.
-6. Without shutting down, the burn continues into a transfer orbit whose
-   apogee is the target apogee (perigee ~200 km).
-7. Coast to apogee.
-8. Apogee burn: raises perigee to the target and trims the inclination.
-9. Payload separation and evaluation against the targets.
+   inclination (corrected for Earth's rotation).  Vehicles without boosters
+   burn the first stage to depletion here.
+4. Boosters only: booster separation at burnout; the first stage continues
+   under the closed-loop guidance of step 6.
+5. First-stage cutoff and separation.
+6. Closed-loop ascent to a 200 km parking altitude in the target orbital
+   plane, across any remaining stages; fairing jettison above 110 km.
+7. Without shutting down, the burn continues into a transfer orbit whose
+   apogee is the target apogee (perigee ~200 km).  A first stage that is
+   still attached is then jettisoned.
+8. Coast to apogee.
+9. Apogee burn: raises perigee to the target and trims the inclination.
+10. Payload separation and evaluation against the targets.
 
-Guidance in the second-stage phases uses Earth-centred inertial vectors
+Liquid stages throttle to stay under 4 g; solid boosters cannot throttle.
+Guidance after the gravity turn uses Earth-centred inertial vectors
 (position/velocity relative to Earth, non-rotating) and Earth's spin axis.
 """
 
@@ -30,46 +37,37 @@ import time
 
 import numpy as np
 
-G0 = 9.80665
+import launch_vehicles as lv
 
-# Falcon 9 Block 5 (approximate public figures).
-VEHICLE = {
-    "s1_dry": 25_600.0,
-    "s1_prop": 395_700.0,
-    "s1_thrust_sl": 7.607e6,
-    "s1_thrust_vac": 8.227e6,
-    "s1_isp_vac": 311.0,
-    "s2_dry": 3_900.0,
-    "s2_prop": 92_670.0,
-    "s2_thrust": 981e3,
-    "s2_isp": 348.0,
-    "fairing": 1_900.0,
-}
+G0 = lv.G0
 
-VEHICLE_ID = "falcon9"
-S1_ID = "falcon9_s1"
-S2_ID = VEHICLE_ID           # the upper stage keeps the vehicle's ID through every separation
 FAIRING_ID = "fairing"
 PAYLOAD_ID = "payload"
 
 LAUNCH_LATITUDE = 28.60822   # LC-39A, as in solar_system.yaml
+LAUNCH_LONGITUDE = -80.60409
 PARKING_ALT = 200e3          # m
 FAIRING_ALT = 110e3          # m
 MEO_MIN_ALT = 2_000e3        # m (top of LEO)
 MEO_MAX_ALT = 35_786e3       # m (geostationary altitude)
-MAX_PAYLOAD = 25_000.0       # kg
-S2_MAX_ACCEL = 4.0 * G0      # throttle the upper stage to stay under 4 g
+MAX_PAYLOAD = 150_000.0      # kg
+G_LIMIT = 4.0 * G0           # liquid stages throttle to stay under 4 g
 TICK = 0.5                   # s, guidance update interval in powered flight
 PACE_CHUNK = 0.25            # s of wall time per sim step when a time warp is set
 KICK_SPEED = 60.0            # m/s, start of pitch-over
-KICK_ANGLE = 15.0            # deg (tuned: MECO ~78 km, max-Q ~45 kPa)
 KICK_DURATION = 10.0         # s
-S2_ASCENT_DV = 4_700.0       # m/s, 2nd-stage delta-v to reach the parking altitude (measured; for estimates)
+CLOSED_LOOP_ALT = 45e3      # m, end of the open-loop gravity turn ...
+MIN_TURN_ANGLE = 15.0        # deg, ... or earlier if the flight path gets this shallow
+SOLVE_EVERY = 4.0            # s between steering solutions (1 s in the last minute)
+PREDICT_DT = 2.0             # s, step of the guidance predictor
+STAGING_COAST = 3.0          # s between first-stage separation and upper-stage ignition
+ASCENT_LOSSES = 1_700.0      # m/s, gravity/drag/steering losses to the parking orbit (for estimates)
+EARTH_OMEGA = 7.2921159e-5   # rad/s
 
 # Pacing presets: (powered-flight warp, coasting warp); None = as fast as possible.
 PACES = {
     "watch": (5.0, 200.0),
-    "x5": (5.0, 5.0),          # constant ×5 throughout, coasts included
+    "x5": (5.0, 5.0),          # constant x5 throughout, coasts included
     "fast": (50.0, 2_000.0),
     "max": (None, None),
 }
@@ -78,20 +76,24 @@ PACES = {
 ALT_TOLERANCE = (50e3, 0.01)  # max(50 km, 1 %)
 INC_TOLERANCE = 0.5           # deg
 
-PHASES = [
-    ("prep", "Configure vehicle and payload"),
-    ("liftoff", "Liftoff and vertical rise"),
-    ("gravity_turn", "Pitch-over and first-stage gravity turn"),
-    ("meco", "MECO and stage separation"),
-    ("s2_ascent", "Second-stage ascent and fairing jettison"),
-    ("transfer", "Orbit insertion and transfer burn"),
-    ("coast", "Coast to apogee"),
-    ("apogee_burn", "Apogee burn (raise perigee, trim inclination)"),
-    ("separation", "Payload separation"),
-]
-
 EARTH_MU = 398600.435507e9
 EARTH_RADIUS = 6.378137e6
+
+
+def phases_for(cfg):
+    """Checklist phases for a vehicle configuration: [(key, title)]."""
+    out = [("prep", f"Configure the {cfg['name']} and payload"),
+           ("liftoff", "Liftoff and vertical rise"),
+           ("gravity_turn", "Pitch-over and gravity turn")]
+    if lv.boosters(cfg):
+        out.append(("booster_sep", "Booster separation; first stage on closed-loop guidance"))
+    out += [("meco", "First-stage cutoff and separation"),
+            ("s2_ascent", "Upper-stage ascent" + (" and fairing jettison" if cfg["fairing"] > 0 else "")),
+            ("transfer", "Orbit insertion and transfer burn"),
+            ("coast", "Coast to apogee"),
+            ("apogee_burn", "Apogee burn (raise perigee, trim inclination)"),
+            ("separation", "Payload separation")]
+    return out
 
 
 class MissionAborted(Exception):
@@ -118,37 +120,74 @@ def _num(raw, key, label, errors):
     return x
 
 
-def max_payload_for(dv_needed):
-    """Largest payload for which the second stage provides dv_needed (kg, may be < 0)."""
-    v = VEHICLE
-    c = v["s2_isp"] * G0
-    k = math.exp(dv_needed / c)
-    return (v["s2_dry"] + v["s2_prop"] - k * v["s2_dry"]) / (k - 1.0)
+def stage_delta_v(cfg, payload):
+    """Ideal (vacuum) delta-v of each burn phase: [(label, m/s)]."""
+    out = []
+    core = cfg["core"]
+    m = lv.liftoff_mass(cfg, payload)
+    core_left = core["prop"]
+    b = lv.boosters(cfg)
+    if b:
+        t_b = b["prop"] / b["mdot"]
+        thr = core.get("boost_throttle", 1.0)
+        t_full = min(t_b, lv.BOOST_THROTTLE_AFTER)
+        core_used = core["mdot"] * (t_full + thr * (t_b - t_full))
+        burned = b["count"] * b["prop"] + core_used
+        impulse = b["count"] * b["thrust_vac"] * t_b + core["thrust_vac"] * core_used / core["mdot"]
+        out.append(("Boosters + first stage", impulse / burned * math.log(m / (m - burned))))
+        m -= burned + b["count"] * b["dry"]
+        core_left -= core_used
+    c = core["thrust_vac"] / core["mdot"]
+    out.append(("First stage" + (" alone" if b else ""), c * math.log(m / (m - core_left))))
+    u = cfg["upper"]
+    m = lv.upper_stack(cfg, payload, fairing=False)
+    out.append(("Upper stage", u["thrust"] / u["mdot"] * math.log(m / (m - u["prop"]))))
+    return out
 
 
-def estimate(perigee_alt, apogee_alt, payload):
-    """Rough second-stage delta-v budget for the profile above."""
-    v = VEHICLE
+def _dv_needed(perigee_alt, apogee_alt, inc_deg):
+    """(ascent into the transfer orbit, apogee burn), m/s."""
     r_park = EARTH_RADIUS + PARKING_ALT
     r_p = EARTH_RADIUS + perigee_alt
     r_a = EARTH_RADIUS + apogee_alt
     mu = EARTH_MU
-    v_park = math.sqrt(mu / r_park)
     v_tp = math.sqrt(mu * (2 / r_park - 2 / (r_park + r_a)))
     v_ta = math.sqrt(mu * (2 / r_a - 2 / (r_park + r_a)))
     v_final = math.sqrt(mu * 2 * r_p / (r_a * (r_a + r_p)))
-    dv_orbit = (v_tp - v_park) + (v_final - v_ta)
-    c = v["s2_isp"] * G0
-    capacity = c * math.log((v["s2_dry"] + v["s2_prop"] + payload) / (v["s2_dry"] + payload))
-    need = S2_ASCENT_DV + dv_orbit
+    lat = math.radians(LAUNCH_LATITUDE)
+    sin_az = max(-1.0, min(1.0, math.cos(math.radians(inc_deg)) / math.cos(lat)))
+    rotation = EARTH_OMEGA * EARTH_RADIUS * math.cos(lat) * sin_az
+    return v_tp + ASCENT_LOSSES - rotation, v_final - v_ta
+
+
+def estimate(cfg, perigee_alt, apogee_alt, inc_deg, payload):
+    """Rough whole-vehicle delta-v budget for the profile above."""
+    ascent, apogee = _dv_needed(perigee_alt, apogee_alt, inc_deg)
+    need = ascent + apogee
+
+    def available(p):
+        return sum(dv for _, dv in stage_delta_v(cfg, p))
+
+    have = available(payload)
+    lo, hi = 0.0, MAX_PAYLOAD
+    if available(lo) < need:
+        max_payload = 0.0
+    else:
+        while hi - lo > 10.0:
+            mid = 0.5 * (lo + hi)
+            lo, hi = (mid, hi) if available(mid) >= need else (lo, mid)
+        max_payload = lo
+    mass = lv.liftoff_mass(cfg, payload)
     return {
-        "dv_ascent": S2_ASCENT_DV,
-        "dv_orbit": dv_orbit,
+        "dv_ascent": ascent,
+        "dv_orbit": apogee,
         "dv_needed": need,
-        "s2_capacity": capacity,
-        "margin": capacity - need,
-        "max_payload": max(0.0, max_payload_for(need)),
-        "liftoff_mass": v["s1_dry"] + v["s1_prop"] + v["s2_dry"] + v["s2_prop"] + v["fairing"] + payload,
+        "dv_available": have,
+        "stages": [{"label": k, "dv": dv} for k, dv in stage_delta_v(cfg, payload)],
+        "margin": have - need,
+        "max_payload": max_payload,
+        "liftoff_mass": mass,
+        "liftoff_tw": lv.liftoff_thrust(cfg) / (mass * G0),
     }
 
 
@@ -156,6 +195,8 @@ def validate(raw):
     """Return (params, errors, estimate) for questionnaire input."""
     raw = raw if isinstance(raw, dict) else {}
     errors = []
+    key = raw.get("vehicle", lv.DEFAULT_VEHICLE)
+    cfg, vehicle_errors = lv.configure(key, raw.get("vehicle_config"))
     perigee = _num(raw, "perigee_km", "Perigee altitude", errors)
     apogee = _num(raw, "apogee_km", "Apogee altitude", errors)
     inc = _num(raw, "inclination_deg", "Inclination", errors)
@@ -175,13 +216,21 @@ def validate(raw):
                       f"between {min_inc}° and {180 - min_inc:.1f}° without a plane change.")
     if payload is not None and not 0 <= payload <= MAX_PAYLOAD:
         errors.append(f"Payload mass must be between 0 and {MAX_PAYLOAD:,.0f} kg.")
+        payload = None
+    errors += vehicle_errors
+    if cfg is not None and payload is not None and not vehicle_errors:
+        tw = lv.liftoff_thrust(cfg) / (lv.liftoff_mass(cfg, payload) * G0)
+        if tw < lv.MIN_LIFTOFF_TW:
+            errors.append(f"Liftoff thrust-to-weight is only {tw:.2f}; it must be at least "
+                          f"{lv.MIN_LIFTOFF_TW:.2f}. Add thrust or remove mass.")
     params = {
         "perigee_km": perigee, "apogee_km": apogee, "inclination_deg": inc,
         "payload_kg": payload, "pace": pace, "reset": bool(raw.get("reset", True)),
+        "vehicle": key, "vehicle_config": cfg,
     }
     est = None
     if not errors:
-        est = estimate(perigee * 1e3, apogee * 1e3, payload)
+        est = estimate(cfg, perigee * 1e3, apogee * 1e3, inc, payload)
     return params, errors, est
 
 
@@ -251,7 +300,7 @@ class MissionStatus:
         self.state = "idle"
         self.params = None
         self.estimate = None
-        self.phases = [{"key": k, "title": t, "state": "pending"} for k, t in PHASES]
+        self.phases = []
         self.telemetry = {}
         self.log = []
         self.result = None
@@ -259,17 +308,18 @@ class MissionStatus:
         self.vehicle = None
 
     def begin(self, params, est):
+        cfg = params["vehicle_config"]
         with self.lock:
             self.abort_requested = False
             self.state = "running"
             self.params = params
             self.estimate = est
-            self.phases = [{"key": k, "title": t, "state": "pending"} for k, t in PHASES]
+            self.phases = [{"key": k, "title": t, "state": "pending"} for k, t in phases_for(cfg)]
             self.telemetry = {}
             self.log = []
             self.result = None
             self.message = None
-            self.vehicle = VEHICLE_ID
+            self.vehicle = cfg["id"]
 
     def phase(self, key):
         with self.lock:
@@ -336,7 +386,18 @@ class MeoMission:
         self.p = params
         self.status = status
         self.warp = PACES[params["pace"]]
-        self.vehicle = VEHICLE_ID
+        self.cfg = params["vehicle_config"]
+        self.vid = self.cfg["id"]
+        self.s1_id = f"{self.vid}_s1"
+        self.boosters_id = f"{self.vid}_boosters"
+        self.b = lv.boosters(self.cfg)
+        self.vehicle = self.vid
+        self.stage = "boost" if self.b else "core"   # which engines are attached: boost, core, upper
+        self.fairing_on = self.cfg["fairing"] > 0
+        self.last_thrust = None
+        self.liftoff_t = None
+        self.boost_end = None
+        self.core_depleted = False
         self.t = 0.0
         self._pace_anchor = None
         self.payload = params["payload_kg"]
@@ -344,20 +405,31 @@ class MeoMission:
         self.r_a_target = EARTH_RADIUS + params["apogee_km"] * 1e3
         self.inc_target = params["inclination_deg"]
         self.pending_events = []
+        self.phase_keys = [k for k, _ in phases_for(self.cfg)]
+        self.phase_index = -1
 
     # -- sim plumbing ---------------------------------------------------------
 
     def log(self, text, kind="info"):
         self.status.add_log(self.t, text, kind)
 
+    def phase(self, key):
+        """Advance the checklist (never backwards: stages can finish out of the usual order)."""
+        i = self.phase_keys.index(key)
+        if i > self.phase_index:
+            self.phase_index = i
+            self.status.phase(key)
+
     def check_abort(self):
         if self.status.abort_requested:
             raise MissionAborted()
 
     def thrust(self, force, mass_rate, frame="inertial", body=None):
-        self.sim.set_thrust(self.vehicle, [float(x) for x in force], mass_rate, frame=frame, body=body)
+        self.last_thrust = ([float(x) for x in force], mass_rate, frame, body)
+        self.sim.set_thrust(self.vehicle, *self.last_thrust)
 
     def cut(self, vehicle=None):
+        self.last_thrust = None
         self.sim.set_thrust(vehicle or self.vehicle, [0.0, 0.0, 0.0], 0.0)
 
     def step(self, dt, powered=True):
@@ -431,14 +503,78 @@ class MeoMission:
         self.status.set_telemetry(tel, sc["id"])
         return el
 
+    # -- vehicle model ------------------------------------------------------------
+
+    def _engine(self, sc):
+        """Thrust (N) and mass rate (kg/s, negative) of the engines now attached.
+
+        Thrust is interpolated between sea level and vacuum by air density.
+        Liquid stages throttle to keep the thrust acceleration under G_LIMIT;
+        solid boosters run at full flow until burnout.
+        """
+        m = sc["mass"]
+        if self.stage == "upper":
+            u = self.cfg["upper"]
+            thr = min(1.0, G_LIMIT * m / u["thrust"])
+            return u["thrust"] * thr, -u["mdot"] * thr
+        p_ratio = min(1.0, sc["nearest_body"]["density"] / 1.225)
+
+        def lerp(st):
+            return st["thrust_vac"] - (st["thrust_vac"] - st["thrust_sl"]) * p_ratio
+
+        core = self.cfg["core"]
+        t_core = lerp(core)
+        t_b = mdot_b = 0.0
+        thr = 1.0
+        if self.stage == "boost":
+            t_b = self.b["count"] * lerp(self.b)
+            mdot_b = self.b["count"] * self.b["mdot"]
+            if self.t - self.liftoff_t > lv.BOOST_THROTTLE_AFTER:
+                thr = core.get("boost_throttle", 1.0)
+        thr = max(0.0, min(thr, (G_LIMIT * m - t_b) / t_core))
+        return t_b + thr * t_core, -(mdot_b + thr * core["mdot"])
+
+    def _reapply_thrust(self):
+        if self.last_thrust:
+            self.sim.set_thrust(self.vehicle, *self.last_thrust)
+
+    def _maybe_jettison_fairing(self, sc, r, v):
+        if not self.fairing_on or np.linalg.norm(r) - self.radius <= FAIRING_ALT:
+            return
+        f = self.cfg["fairing"]
+        side = unit(np.cross(unit(v), unit(r)))
+        self.sim.stage(self.vehicle, [
+            {"id": FAIRING_ID, "mass": f, "dry_mass": f, "delta_v": list(2.0 * side)},
+            {"id": self.vehicle, "mass": sc["mass"] - f, "dry_mass": max(0.0, sc["dry_mass"] - f),
+             "delta_v": [0.0, 0.0, 0.0]},
+        ], frame="inertial")
+        self.fairing_on = False
+        self._reapply_thrust()  # staging resets thrust on the new craft
+        self.log(f"Fairing jettisoned at {(np.linalg.norm(r) - self.radius) / 1e3:.0f} km.")
+
+    def _check_events(self):
+        """Handle engine cutoff / impact.  Returns True if the vehicle was restaged."""
+        if any(e["time"] - self.liftoff_t > 5 for e in self.take_events({"contact_start"}, self.vehicle)):
+            raise MissionFailed("The vehicle impacted the surface.")
+        if not self.take_events({"engine_cutoff"}, self.vehicle):
+            return False
+        if self.stage == "upper":
+            raise MissionFailed("Upper-stage propellant depleted before reaching the target orbit "
+                                "(payload too heavy for this orbit?).")
+        if self.stage == "boost":
+            raise MissionFailed("The first stage ran out of propellant before the boosters burned out.")
+        self._stage_core()
+        return True
+
     # -- mission ----------------------------------------------------------------
 
     def run(self):
         try:
             self._prepare()
             self._first_stage()
-            self._staging()
-            self._second_stage_ascent()
+            if self.core_depleted:
+                self._stage_core()
+            self._closed_loop_ascent()
             self._transfer_burn()
             self._coast_to_apogee()
             self._apogee_burn()
@@ -486,29 +622,48 @@ class MeoMission:
 
     # 1. Configure
     def _prepare(self):
-        self.status.phase("prep")
+        self.phase("prep")
         if self.p["reset"]:
             self.sim.reset()
             self.log("Simulation reset to its initial state.")
         info = self.sim.info()
-        if VEHICLE_ID not in info["spacecraft"]:
-            raise MissionFailed(f"No '{VEHICLE_ID}' in the simulation. Enable 'reset before launch' and retry.")
         self.t = info["time"]
         earth = self.sim.get_body("earth")
         self.mu = info["gravitational_constant"] * earth["mass"]
         self.radius = earth["radius"]
         self.pole = np.array(earth["pole"])
         self.omega = 2 * math.pi / earth["rotation_period"] if earth["rotation_period"] else 0.0
+
+        # Clear the pad, and make sure this flight's craft IDs are free.
+        planned = {self.vid, self.s1_id, PAYLOAD_ID}
+        if self.b:
+            planned.add(self.boosters_id)
+        if self.fairing_on:
+            planned.add(FAIRING_ID)
+        for s in self.sim.get_state(bodies=False)["spacecraft"]:
+            nb = s["nearest_body"]
+            if (nb["id"] == "earth" and nb["altitude"] < 100.0 and abs(nb["latitude"] - LAUNCH_LATITUDE) < 0.01
+                    and abs((nb["longitude"] - LAUNCH_LONGITUDE + 180.0) % 360.0 - 180.0) < 0.01):
+                self.sim.remove_spacecraft(s["id"])
+                self.log(f"Cleared '{s['id']}' from the pad.")
+            elif s["id"] in planned:
+                raise MissionFailed(f"A craft named '{s['id']}' is already in the simulation. "
+                                    "Enable 'reset before launch' and retry.")
+
+        cfg = self.cfg
+        mass = lv.liftoff_mass(cfg, self.payload)
+        prop = cfg["core"]["prop"] + (self.b["count"] * self.b["prop"] if self.b else 0.0)
+        self.sim.add_spacecraft({
+            "id": self.vid, "mass": mass, "dry_mass": mass - prop,
+            "reference_area": lv.stack_area(cfg), "drag_coefficient": lv.CD_TABLE,
+            "initial_state": {"frame": "surface", "body": "earth", "latitude": LAUNCH_LATITUDE,
+                              "longitude": LAUNCH_LONGITUDE, "altitude": 0.0},
+        })
+        boosters = f", {self.b['count']} boosters" if self.b else ""
+        self.log(f"{cfg['name']} on the pad{boosters}: liftoff mass {mass:,.0f} kg including a "
+                 f"{self.payload:,.0f} kg payload.")
         sc, r, v = self.craft()
         nb = sc["nearest_body"]
-        if nb["id"] != "earth" or nb["altitude"] > 5.0:
-            raise MissionFailed("The Falcon 9 is not on the launch pad. Enable 'reset before launch' and retry.")
-
-        v_ = VEHICLE
-        self.stack_after_s1 = v_["s2_dry"] + v_["s2_prop"] + v_["fairing"] + self.payload
-        total = v_["s1_dry"] + v_["s1_prop"] + self.stack_after_s1
-        self.sim.set_mass(VEHICLE_ID, total, total - v_["s1_prop"])
-        self.log(f"Vehicle configured: liftoff mass {total:,.0f} kg including a {self.payload:,.0f} kg payload.")
 
         # Launch azimuth for the target inclination, corrected for Earth's rotation.
         lat = math.radians(nb["latitude"])
@@ -519,168 +674,320 @@ class MeoMission:
         self.log(f"Launch azimuth {math.degrees(self.azimuth):.1f}° for a {self.inc_target:.1f}° inclination.")
         self.report(sc, r, v, "on the pad")
 
-    # 2-3. First stage
-    def _s1_force(self, sc, pitch, heading):
-        v_ = VEHICLE
-        p_ratio = min(1.0, sc["nearest_body"]["density"] / 1.225)
-        thrust = v_["s1_thrust_vac"] - (v_["s1_thrust_vac"] - v_["s1_thrust_sl"]) * p_ratio
-        mdot = -v_["s1_thrust_vac"] / (v_["s1_isp_vac"] * G0)
+    # 2-4. Liftoff, gravity turn, booster separation
+    def _s1_thrust(self, sc, pitch):
+        thrust, mdot = self._engine(sc)
         cp = math.cos(pitch)
-        return [thrust * cp * math.sin(heading), thrust * cp * math.cos(heading), thrust * math.sin(pitch)], mdot
+        h = self.azimuth
+        self.thrust([thrust * cp * math.sin(h), thrust * cp * math.cos(h), thrust * math.sin(pitch)],
+                    mdot, "enu", "earth")
 
     def _first_stage(self):
-        self.status.phase("liftoff")
+        """Open-loop gravity turn through the dense atmosphere (to CLOSED_LOOP_ALT,
+        or until the flight path gets shallower than MIN_TURN_ANGLE).
+
+        Boosters that burn out on the way are separated; a first stage that
+        runs dry first (no boosters) sets core_depleted.
+        """
+        self.phase("liftoff")
         sc, r, v = self.craft()
-        force, mdot = self._s1_force(sc, math.pi / 2, self.azimuth)
-        self.thrust(force, mdot, "enu", "earth")
+        self.liftoff_t = self.t
+        self.boost_end = self.t + self.b["prop"] / self.b["mdot"] if self.b else None
+        self._s1_thrust(sc, math.pi / 2)
         self.log("Ignition and liftoff.")
-        launch_t = self.t
+        kick = self.cfg["kick_angle"]
         kick_start = None
         while True:
-            self.step(TICK)
+            self.step(self._tick())
             sc, r, v = self.craft()
             nb = sc["nearest_body"]
+            if self._check_boosters(sc, v):
+                sc, r, v = self.craft()
+                nb = sc["nearest_body"]
             if self.take_events({"engine_cutoff"}, self.vehicle):
-                break
+                if self.stage == "boost":
+                    raise MissionFailed("The first stage ran out of propellant before the boosters burned out.")
+                self.core_depleted = True
+                return
+            if nb["altitude"] >= CLOSED_LOOP_ALT:
+                return
             enu = nb["surface_relative_velocity_enu"]
             if kick_start is None:
                 pitch = math.pi / 2
                 if nb["airspeed"] >= KICK_SPEED:
                     kick_start = self.t
-                    self.status.phase("gravity_turn")
+                    self.phase("gravity_turn")
                     self.log(f"Pitch-over at {nb['airspeed']:.0f} m/s, altitude {nb['altitude']:.0f} m.")
             elif self.t - kick_start < KICK_DURATION:
-                pitch = math.radians(90 - KICK_ANGLE * (self.t - kick_start) / KICK_DURATION)
+                pitch = math.radians(90 - kick * (self.t - kick_start) / KICK_DURATION)
             else:
                 # Gravity turn: thrust along the surface-relative velocity.
                 pitch = math.atan2(enu[2], math.hypot(enu[0], enu[1]))
-            force, mdot = self._s1_force(sc, pitch, self.azimuth)
-            self.thrust(force, mdot, "enu", "earth")
-            self.report(sc, r, v, "first stage")
-            if nb["altitude"] < -1.0 and self.t - launch_t > 5:
+                if pitch < math.radians(MIN_TURN_ANGLE):
+                    # Too flat for this thrust-to-weight: let closed-loop guidance pull up now.
+                    self.log(f"Flight path down to {math.degrees(pitch):.0f}° at "
+                             f"{nb['altitude'] / 1e3:.1f} km; switching to closed-loop guidance early.")
+                    return
+            self._s1_thrust(sc, pitch)
+            self._maybe_jettison_fairing(sc, r, v)
+            self.report(sc, r, v, "boosters and first stage" if self.stage == "boost" else "first stage")
+            if nb["altitude"] < -1.0 and self.t - self.liftoff_t > 5:
                 raise MissionFailed("The vehicle hit the ground during first-stage flight.")
 
-    # 4. Staging
-    def _staging(self):
-        self.status.phase("meco")
+    def _tick(self):
+        """Guidance interval, shortened so booster burnout lands on a step boundary."""
+        if self.stage == "boost":
+            return max(1e-3, min(TICK, self.boost_end - self.t))
+        return TICK
+
+    def _check_boosters(self, sc, v):
+        if self.stage == "boost" and self.t >= self.boost_end - 1e-6:
+            self._separate_boosters(sc, v)
+            return True
+        return False
+
+    def _separate_boosters(self, sc, v):
+        self.phase("booster_sep")
+        b = self.b
+        n = b["count"]
+        left = n * max(0.0, b["prop"] - b["mdot"] * (self.t - self.liftoff_t))
+        mass = n * b["dry"] + left
+        vhat = unit(v)
+        self.sim.stage(self.vehicle, [
+            {"id": self.boosters_id, "mass": mass, "dry_mass": mass,
+             "reference_area": n * lv.area(b["diameter"]), "delta_v": list(-1.0 * vhat)},
+            {"id": self.vid, "mass": sc["mass"] - mass, "dry_mass": sc["dry_mass"] - n * b["dry"],
+             "reference_area": lv.area(self.cfg["diameter"]), "delta_v": [0.0, 0.0, 0.0]},
+        ], frame="inertial")
+        self.stage = "core"
+        self._reapply_thrust()
+        alt = (sc["nearest_body"]["altitude"]) / 1e3
+        self.log(f"Booster burnout and separation at {alt:.1f} km, {np.linalg.norm(v):,.0f} m/s inertial.")
+
+    # 5. First-stage separation
+    def _stage_core(self):
+        self.phase("meco")
         sc, r, v = self.craft()
         nb = sc["nearest_body"]
-        self.log(f"MECO at {nb['altitude'] / 1e3:.1f} km, {np.linalg.norm(v):,.0f} m/s inertial.")
-        v_ = VEHICLE
+        upper = lv.upper_stack(self.cfg, self.payload, self.fairing_on)
+        s1_mass = max(self.cfg["core"]["dry"], sc["mass"] - upper)
+        left = s1_mass - self.cfg["core"]["dry"]
+        self.cut()
+        self.log(f"First-stage cutoff at {nb['altitude'] / 1e3:.1f} km, {np.linalg.norm(v):,.0f} m/s inertial"
+                 + (f" ({left:,.0f} kg propellant left)." if left > 1.0 else "."))
         vhat = unit(v)
-        s1_mass = max(v_["s1_dry"], sc["mass"] - self.stack_after_s1)
+        u = self.cfg["upper"]
         self.sim.stage(self.vehicle, [
-            {"id": S1_ID, "mass": s1_mass, "dry_mass": min(v_["s1_dry"], s1_mass), "delta_v": list(-1.0 * vhat)},
-            {"id": S2_ID, "mass": self.stack_after_s1,
-             "dry_mass": v_["s2_dry"] + v_["fairing"] + self.payload, "delta_v": list(0.5 * vhat)},
+            {"id": self.s1_id, "mass": s1_mass, "dry_mass": min(self.cfg["core"]["dry"], s1_mass),
+             "delta_v": list(-1.0 * vhat)},
+            {"id": self.vid, "mass": upper,
+             "dry_mass": u["dry"] + self.payload + (self.cfg["fairing"] if self.fairing_on else 0.0),
+             "delta_v": list(0.5 * vhat)},
         ], frame="inertial")
-        self.vehicle = S2_ID
+        self.stage = "upper"
         self.log("Stage separation: first stage released.")
-        for _ in range(3):
+        for _ in range(int(STAGING_COAST)):
             self.step(1.0)
         sc, r, v = self.craft()
         self.report(sc, r, v, "coasting after separation")
+        self.phase("s2_ascent")
+        self.log("Upper-stage ignition.")
 
-    # 5. Second-stage ascent to the parking altitude
-    def _s2_thrust_mag(self, mass):
-        v_ = VEHICLE
-        thrust = min(v_["s2_thrust"], S2_MAX_ACCEL * mass)
-        return thrust, -thrust / (v_["s2_isp"] * G0)
+    # 6. Closed-loop ascent to the parking orbit
+    def _burn_schedule(self, sc):
+        """Remaining powered flight as segments for the predictor (vacuum figures).
 
-    def _second_stage_ascent(self):
-        """Closed-loop ascent straight into the transfer orbit's perigee (200 km).
-
-        Horizontal: thrust in the target plane toward the transfer-orbit perigee
-        speed.  Vertical: a linearly varying acceleration chosen so that the
-        stage arrives at the parking altitude with zero vertical speed exactly
-        when the burn ends (t_go from the rocket equation).  Out of plane:
-        null the velocity component normal to the target plane.
+        Each segment: thrust (N), mdot (kg/s), and either a duration (s) or a
+        propellant load (kg); 'drop' is the mass released at its end and
+        'coast' an unpowered interval after it.
         """
-        self.status.phase("s2_ascent")
+        core, u = self.cfg["core"], self.cfg["upper"]
+        prop = max(0.0, sc["mass"] - sc["dry_mass"])
+        segs = []
+        if self.stage == "boost":
+            b, n = self.b, self.b["count"]
+            thr = core.get("boost_throttle", 1.0) if self.t - self.liftoff_t > lv.BOOST_THROTTLE_AFTER else 1.0
+            duration = max(0.0, self.boost_end - self.t)
+            mdot = n * b["mdot"] + thr * core["mdot"]
+            segs.append({"thrust": n * b["thrust_vac"] + thr * core["thrust_vac"], "mdot": mdot,
+                         "duration": duration, "limit": False, "drop": n * b["dry"], "coast": 0.0})
+            prop -= mdot * duration
+        if self.stage in ("boost", "core"):
+            segs.append({"thrust": core["thrust_vac"], "mdot": core["mdot"], "prop": max(0.0, prop),
+                         "limit": True, "drop": core["dry"], "coast": STAGING_COAST})
+            prop = u["prop"]
+        segs.append({"thrust": u["thrust"], "mdot": u["mdot"], "prop": prop, "limit": True,
+                     "drop": 0.0, "coast": 0.0})
+        return segs
+
+    def _predict(self, x0, A, B, segs, vt_target):
+        """Fly the remaining burn in 2D with tan(pitch) = A + B*tau.
+
+        x0 = (r, v_r, v_t, mass).  Returns (r, v_r, tau) when v_t reaches
+        vt_target, and whether it got there before the propellant ran out.
+        """
+        mu = self.mu
+        r, vr, vt, m = x0
+        fairing = self.cfg["fairing"] if self.fairing_on else 0.0
+        r_fairing = self.radius + FAIRING_ALT
+        tau = 0.0
+
+        def accel(r, vr, vt, a, tau):
+            phi = math.atan(A + B * tau)
+            return vt * vt / r - mu / (r * r) + a * math.sin(phi), -vr * vt / r + a * math.cos(phi)
+
+        for seg in segs:
+            t_left = seg.get("duration")
+            p_left = seg.get("prop")
+            while True:
+                thrust, mdot = seg["thrust"], seg["mdot"]
+                if seg["limit"]:
+                    thr = min(1.0, G_LIMIT * m / thrust)
+                    thrust, mdot = thrust * thr, mdot * thr
+                h = PREDICT_DT
+                if t_left is not None:
+                    h = min(h, t_left)
+                if p_left is not None:
+                    h = min(h, p_left / mdot)
+                if h <= 1e-6:
+                    break
+                # Midpoint (RK2) step.
+                ar, at = accel(r, vr, vt, thrust / m, tau)
+                hm = 0.5 * h
+                rm, vrm, vtm = r + hm * vr, vr + hm * ar, vt + hm * at
+                ar, at = accel(rm, vrm, vtm, thrust / (m - mdot * hm), tau + hm)
+                r1, vr1, vt1 = r + h * vrm, vr + h * ar, vt + h * at
+                if vt1 >= vt_target:
+                    f = (vt_target - vt) / (vt1 - vt) if vt1 > vt else 1.0
+                    return r + f * (r1 - r), vr + f * (vr1 - vr), tau + f * h, True
+                r, vr, vt, m, tau = r1, vr1, vt1, m - mdot * h, tau + h
+                if t_left is not None:
+                    t_left -= h
+                if p_left is not None:
+                    p_left -= mdot * h
+                if fairing and r > r_fairing:
+                    m -= fairing
+                    fairing = 0.0
+            m -= seg["drop"]
+            if seg["coast"]:
+                ar, at = accel(r, vr, vt, 0.0, tau)
+                h = seg["coast"]
+                r, vr, vt, tau = r + h * vr, vr + h * ar, vt + h * at, tau + h
+        return r, vr, tau, False
+
+    def _solve_steering(self, x0, segs, vt_target, guess):
+        """Newton iterations on (A, B) so the burn ends at the parking radius with v_r = 0."""
+        r_park = self.radius + PARKING_ALT
+
+        def residual(A, B):
+            r, vr, tau, ok = self._predict(x0, A, B, segs, vt_target)
+            return np.array([(r - r_park) / 1e3, vr / 10.0]), tau, ok
+
+        A, B = guess
+        f, tau, ok = residual(A, B)
+        for _ in range(8):
+            if abs(f[0]) < 0.5 and abs(f[1]) < 0.5:
+                break
+            dA, dB = 1e-4, 1e-6
+            fA, _, _ = residual(A + dA, B)
+            fB, _, _ = residual(A, B + dB)
+            J = np.column_stack(((fA - f) / dA, (fB - f) / dB))
+            try:
+                d = np.linalg.solve(J, -f)
+            except np.linalg.LinAlgError:
+                break
+            scale = min(1.0, 0.5 / max(abs(d[0]), 1e-12), 0.005 / max(abs(d[1]), 1e-12))
+            A, B = A + scale * d[0], B + scale * d[1]
+            f, tau, ok = residual(A, B)
+        return A, B, tau, ok
+
+    def _closed_loop_ascent(self):
+        """Predictive closed-loop ascent straight into the transfer orbit's perigee (200 km).
+
+        Every few seconds the remaining burn (booster burnout, first stage, staging
+        coast, upper stage, fairing jettison, 4 g throttling) is flown in a 2D
+        predictor, and the linear-tangent pitch program tan(pitch) = A + B*t is
+        solved so the vehicle reaches the 200 km parking radius with zero vertical
+        speed just as its horizontal speed reaches the transfer orbit's perigee
+        speed.  Out of plane, the velocity normal to the target plane is nulled.
+        """
         sc, r, v = self.craft()
         self.plane = target_plane_normal(r, v, self.pole, self.inc_target)
         r_park = self.radius + PARKING_ALT
-        v_perigee = math.sqrt(self.mu * (2 / r_park - 2 / (r_park + self.r_a_target)))
-        c = VEHICLE["s2_isp"] * G0
-        self.log("Second-stage ignition.")
-        fairing_on = True
+        v_target = math.sqrt(self.mu * (2 / r_park - 2 / (r_park + self.r_a_target)))
+        steering = None  # (A, B, t_solved, t_go, ok)
+        warned = False
         orbit_logged = False
         while True:
             sc, r, v = self.craft()
-            self._check_s2_events()
+            if self._check_events() or self._check_boosters(sc, v):
+                steering = (steering[0], steering[1], steering[2], 0.0, steering[4]) if steering else None
+                continue
             rn = np.linalg.norm(r)
             up = r / rn
             n = self.plane
             t_hat = unit(np.cross(n, up))
             v_r, v_t, v_n = float(v @ up), float(v @ t_hat), float(v @ n)
-            thrust, mdot = self._s2_thrust_mag(sc["mass"])
+            thrust, mdot = self._engine(sc)
             a_T = thrust / sc["mass"]
-
-            dv_rem = math.sqrt(max(v_perigee - v_t, 0.0) ** 2 + v_r**2 + v_n**2)
-            t_go = sc["mass"] * (1 - math.exp(-dv_rem / c)) / -mdot
-            el = self.report(sc, r, v, "second stage ascent")
+            el = self.report(sc, r, v, "upper-stage ascent" if self.stage == "upper" else "first-stage ascent")
             if el["r_p"] > self.radius + 150e3 and not orbit_logged:
                 orbit_logged = True
-                self.status.phase("transfer")
+                self.phase("transfer")
                 self.log(f"Orbit achieved (perigee {(el['r_p'] - self.radius) / 1e3:.0f} km); "
                          "continuing the burn into the transfer orbit.")
+
+            t_go = steering[3] - (self.t - steering[2]) if steering else None
+            if steering is None or self.t - steering[2] >= (SOLVE_EVERY if t_go > 60 else 1.0) or t_go <= 0:
+                guess = ((steering[0] + steering[1] * (self.t - steering[2]), steering[1]) if steering
+                         else (v_r / max(v_t, 1.0), 0.0))
+                A, B, tau, ok = self._solve_steering((rn, v_r, v_t, sc["mass"]), self._burn_schedule(sc),
+                                                     v_target, guess)
+                steering = (A, B, self.t, tau, ok)
+                t_go = tau
+                if not ok and not warned:
+                    warned = True
+                    self.log("Guidance predicts the propellant will run out before the transfer orbit "
+                             "is reached; flying the best available trajectory.", "error")
             if t_go < 8.0:
                 return  # hand over to the precise terminal burn
 
-            T = max(t_go, 5.0)
-            D = r_park - rn - v_r * T
-            a1 = -12 * (v_r * T / 2 + D) / T**3
-            a0 = (-v_r - a1 * T**2 / 2) / T
-            g_eff = self.mu / rn**2 - v_t**2 / rn
-            a_v = max(-0.7 * a_T, min(0.95 * a_T, a0 + g_eff))
+            A, B, t0 = steering[0], steering[1], steering[2]
+            phi = math.atan(A + B * (self.t - t0))
             a_n = max(-0.3 * a_T, min(0.3 * a_T, -v_n / 20.0))
-            a_t = math.sqrt(max(a_T**2 - a_v**2 - a_n**2, 0.0))
-            direction = (a_v * up + a_n * n + a_t * t_hat) / a_T
+            a_in = math.sqrt(max(a_T**2 - a_n**2, 0.0))
+            direction = (a_in * (math.sin(phi) * up + math.cos(phi) * t_hat) + a_n * n) / a_T
             self.thrust(direction * thrust, mdot)
-
-            if fairing_on and rn - self.radius > FAIRING_ALT:
-                self.sim.stage(self.vehicle, [
-                    {"id": FAIRING_ID, "mass": VEHICLE["fairing"], "dry_mass": VEHICLE["fairing"],
-                     "delta_v": list(2.0 * n)},
-                    {"id": S2_ID, "mass": sc["mass"] - VEHICLE["fairing"],
-                     "dry_mass": VEHICLE["s2_dry"] + self.payload, "delta_v": [0.0, 0.0, 0.0]},
-                ], frame="inertial")
-                self.thrust(direction * thrust, mdot)  # staging resets thrust on the new craft
-                fairing_on = False
-                self.log(f"Fairing jettisoned at {(rn - self.radius) / 1e3:.0f} km.")
-            self.step(TICK)
-
-    def _check_s2_events(self):
-        if self.take_events({"engine_cutoff"}, self.vehicle):
-            raise MissionFailed("Second-stage propellant depleted before reaching the target orbit "
-                                "(payload too heavy for this orbit?).")
-        if self.take_events({"contact_start"}, self.vehicle):
-            raise MissionFailed("The second stage impacted the surface.")
+            self._maybe_jettison_fairing(sc, r, v)
+            self.step(self._tick())
 
     def _burn_to(self, desired_velocity, done, note):
         """Thrust along velocity-to-be-gained until done(el, v_go) is true."""
         while True:
             sc, r, v = self.craft()
-            self._check_s2_events()
+            if self._check_events():
+                continue
             el = self.report(sc, r, v, note)
             v_go = desired_velocity(r, v) - v
             v_go_n = float(np.linalg.norm(v_go))
             if done(el, v_go_n):
                 self.cut()
                 return el
-            thrust, mdot = self._s2_thrust_mag(sc["mass"])
+            thrust, mdot = self._engine(sc)
             a_T = thrust / sc["mass"]
             self.thrust(v_go / v_go_n * thrust, mdot)
+            self._maybe_jettison_fairing(sc, r, v)
             # Shorten the last steps so the cutoff lands close to the target.
             self.step(max(0.02, min(TICK, v_go_n / a_T)))
 
     def _horizontal_in_plane(self, r):
         return unit(np.cross(self.plane, unit(r)))
 
-    # 6. Transfer burn: perigee here, apogee at the target apogee
+    # 7. Transfer burn: perigee here, apogee at the target apogee
     def _transfer_burn(self):
-        self.status.phase("transfer")
+        self.phase("transfer")
         r_a_t = self.r_a_target
+        self.log("Terminal guidance for the end of the transfer burn.")
 
         def desired(r, v):
             rn = np.linalg.norm(r)
@@ -688,17 +995,20 @@ class MeoMission:
             return speed * self._horizontal_in_plane(r)
 
         el = self._burn_to(desired, lambda el, vg: vg < 0.5 or el["r_a"] >= r_a_t, "transfer burn")
-        self.log(f"SECO-1: transfer orbit {(el['r_p'] - self.radius) / 1e3:,.0f} × "
+        self.log(f"Transfer orbit {(el['r_p'] - self.radius) / 1e3:,.0f} × "
                  f"{(el['r_a'] - self.radius) / 1e3:,.0f} km, inclination {el['inc']:.2f}°.")
+        if self.stage != "upper":
+            # The first stage did the whole transfer burn: drop it before the coast.
+            self._stage_core()
 
-    # 7. Coast
+    # 8. Coast
     def _coast_to_apogee(self):
-        self.status.phase("coast")
+        self.phase("coast")
         sc, r, v = self.craft()
         r_a = elements(r, v, self.mu, self.pole)["r_a"]
         v_a = math.sqrt(self.mu * 2 * self.r_p_target / (r_a * (r_a + self.r_p_target)))
         v_now_a = np.linalg.norm(np.cross(r, v)) / r_a
-        thrust, _ = self._s2_thrust_mag(sc["mass"])
+        thrust, _ = self._engine(sc)
         lead = 0.5 * abs(v_a - v_now_a) / (thrust / sc["mass"])  # half the burn before apogee
         self.log(f"Coasting to apogee (burn starts {lead:.0f} s early).")
         while True:
@@ -712,9 +1022,9 @@ class MeoMission:
             max_step = 600.0 if not self.warp[1] else max(1.0, self.warp[1] * 1.0)
             self.step(min(remaining, max_step), powered=False)
 
-    # 8. Apogee burn
+    # 9. Apogee burn
     def _apogee_burn(self):
-        self.status.phase("apogee_burn")
+        self.phase("apogee_burn")
         r_p_t = self.r_p_target
 
         def desired(r, v):
@@ -724,20 +1034,21 @@ class MeoMission:
 
         self.log("Apogee burn.")
         el = self._burn_to(desired, lambda el, vg: vg < 0.5, "apogee burn")
-        self.log(f"SECO-2: orbit {(el['r_p'] - self.radius) / 1e3:,.0f} × "
+        self.log(f"Burn complete: orbit {(el['r_p'] - self.radius) / 1e3:,.0f} × "
                  f"{(el['r_a'] - self.radius) / 1e3:,.0f} km, inclination {el['inc']:.2f}°.")
 
-    # 9. Separation and evaluation
+    # 10. Separation and evaluation
     def _separate_and_evaluate(self):
-        self.status.phase("separation")
+        self.phase("separation")
         sc, r, v = self.craft()
         vhat = unit(v)
+        u_dry = self.cfg["upper"]["dry"]
         self.sim.stage(self.vehicle, [
             {"id": PAYLOAD_ID, "mass": self.payload or 1.0, "dry_mass": self.payload or 1.0,
              "delta_v": [0.0, 0.0, 0.0], "drag_coefficient": None},
             # The spent stage backs away so the payload keeps the orbit it was given.
-            {"id": S2_ID, "mass": max(sc["mass"] - self.payload, VEHICLE["s2_dry"]),
-             "dry_mass": VEHICLE["s2_dry"], "delta_v": list(-0.5 * vhat)},
+            {"id": self.vid, "mass": max(sc["mass"] - self.payload, u_dry),
+             "dry_mass": u_dry, "delta_v": list(-0.5 * vhat)},
         ], frame="inertial")
         self.vehicle = PAYLOAD_ID
         self.log("Payload separated.")
@@ -755,9 +1066,8 @@ class MeoMission:
         result["success"] = (abs(errs["perigee_km"]) <= tol_alt(self.p["perigee_km"])
                              and abs(errs["apogee_km"]) <= tol_alt(self.p["apogee_km"])
                              and abs(errs["inclination_deg"]) <= INC_TOLERANCE)
-        result["propellant_left_kg"] = None
-        s2 = self.sim.get_spacecraft(S2_ID)
-        result["propellant_left_kg"] = max(0.0, s2["mass"] - s2["dry_mass"])
+        upper = self.sim.get_spacecraft(self.vid)
+        result["propellant_left_kg"] = max(0.0, upper["mass"] - upper["dry_mass"])
         self.log(f"Final orbit {result['perigee_km']:,.0f} × {result['apogee_km']:,.0f} km at "
                  f"{result['inclination_deg']:.2f}° (target {self.p['perigee_km']:,.0f} × "
                  f"{self.p['apogee_km']:,.0f} km at {self.inc_target:.2f}°).",

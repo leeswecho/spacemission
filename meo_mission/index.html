@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Falcon 9 to MEO</title>
+  <title>Rocket to MEO</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="style.css">
 </head>
@@ -11,7 +11,7 @@
   <header class="topbar">
     <div>
       <p class="eyebrow">Mission</p>
-      <h1>Falcon 9 → Medium Earth Orbit</h1>
+      <h1>Launch to Medium Earth Orbit</h1>
     </div>
     <div class="topbar-right">
       <span id="sim-status" class="pill pill-wait">Connecting…</span>
@@ -23,19 +23,32 @@
     <!-- Questionnaire -------------------------------------------------------- -->
     <section class="card" id="plan">
       <h2>Plan the mission</h2>
-      <p class="lede">Answer the questions below. The autopilot will launch the Falcon 9 from
-        Cape Canaveral and try to place your payload in that orbit.</p>
-
-      <div class="presets">
-        <span class="muted">Start from a real constellation:</span>
-        <button type="button" data-preset="gps">GPS</button>
-        <button type="button" data-preset="galileo">Galileo</button>
-        <button type="button" data-preset="glonass">GLONASS</button>
-      </div>
+      <p class="lede">Answer the questions below. The autopilot will launch your rocket from
+        LC-39A at Cape Canaveral and try to place your payload in that orbit.</p>
 
       <form id="form" novalidate>
         <fieldset>
-          <legend><span class="num">1</span> How high should the orbit's <strong>lowest point (perigee)</strong> be?</legend>
+          <legend><span class="num">1</span> Which <strong>rocket</strong> should fly?</legend>
+          <div id="rockets" class="choices rockets"></div>
+          <details id="vehicle-details" class="vehicle">
+            <summary>Adjust masses, thrust and propellant flow <span id="vehicle-edited" class="tag hidden">edited</span></summary>
+            <p class="help">Approximate public figures. Each stage burns at a constant propellant flow;
+              thrust is interpolated between sea level and vacuum with air density. Changing the
+              rocket above restores its defaults.</p>
+            <div id="stages"></div>
+            <div class="actions"><button type="button" id="vehicle-reset">Restore defaults</button></div>
+          </details>
+        </fieldset>
+
+        <div class="presets orbit-presets">
+          <span class="muted">Start from a real constellation:</span>
+          <button type="button" data-preset="gps">GPS</button>
+          <button type="button" data-preset="galileo">Galileo</button>
+          <button type="button" data-preset="glonass">GLONASS</button>
+        </div>
+
+        <fieldset>
+          <legend><span class="num">2</span> How high should the orbit's <strong>lowest point (perigee)</strong> be?</legend>
           <div class="answer">
             <input id="perigee" name="perigee_km" type="number" inputmode="decimal" step="any" value="20180" required>
             <span class="unit">km above the surface</span>
@@ -44,7 +57,7 @@
         </fieldset>
 
         <fieldset>
-          <legend><span class="num">2</span> How high should its <strong>highest point (apogee)</strong> be?</legend>
+          <legend><span class="num">3</span> How high should its <strong>highest point (apogee)</strong> be?</legend>
           <div class="answer">
             <input id="apogee" name="apogee_km" type="number" inputmode="decimal" step="any" value="20180" required>
             <span class="unit">km above the surface</span>
@@ -53,7 +66,7 @@
         </fieldset>
 
         <fieldset>
-          <legend><span class="num">3</span> What <strong>inclination</strong> should the orbit have?</legend>
+          <legend><span class="num">4</span> What <strong>inclination</strong> should the orbit have?</legend>
           <div class="answer">
             <input id="inclination" name="inclination_deg" type="number" inputmode="decimal" step="any" value="55" required>
             <span class="unit">degrees to the equator</span>
@@ -62,7 +75,7 @@
         </fieldset>
 
         <fieldset>
-          <legend><span class="num">4</span> How much <strong>payload</strong> is the Falcon 9 carrying?</legend>
+          <legend><span class="num">5</span> How much <strong>payload</strong> is the rocket carrying?</legend>
           <div class="answer">
             <input id="payload" name="payload_kg" type="number" inputmode="decimal" step="any" value="4300" required>
             <span class="unit">kg</span>
@@ -71,7 +84,7 @@
         </fieldset>
 
         <fieldset>
-          <legend><span class="num">5</span> How fast should the flight play out?</legend>
+          <legend><span class="num">6</span> How fast should the flight play out?</legend>
           <div class="choices">
             <label><input type="radio" name="pace" value="watch" checked>
               <span><strong>Watchable</strong><small>×5 during burns, ×200 while coasting (about 2½ minutes for a GPS orbit)</small></span></label>
@@ -85,7 +98,7 @@
         </fieldset>
 
         <fieldset>
-          <legend><span class="num">6</span> Start from a fresh launch pad?</legend>
+          <legend><span class="num">7</span> Start from a fresh launch pad?</legend>
           <label class="check"><input id="reset" type="checkbox" checked>
             <span>Reset the simulation before launch <small>(clears anything else happening in the shared simulation)</small></span></label>
         </fieldset>

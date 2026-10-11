@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Mission page: fly the Falcon 9 into a medium Earth orbit.
+"""Mission page: launch a rocket into a medium Earth orbit.
 
 Serves a questionnaire page (./meo_mission) where the operator picks the
-target perigee, apogee, inclination and payload mass.  On launch, the
+rocket (and may edit its masses, thrust and propellant flows) and the target
+perigee, apogee, inclination and payload mass.  On launch, the
 autopilot in meo_autopilot.py flies the mission server-side by sending
 commands to the simulation over ZeroMQ; the page shows its progress.  One
 mission runs at a time; every open page sees the same mission.
@@ -120,7 +121,9 @@ class Handler(SimpleHTTPRequestHandler):
             self._json(400, {"ok": False, "errors": ["Request body must be a JSON object."]})
         elif path == "/api/validate":
             params, errors, est = ap.validate(body)
-            self._json(200, {"ok": not errors, "errors": errors, "estimate": est})
+            cfg = params["vehicle_config"]
+            phases = [{"key": k, "title": t} for k, t in ap.phases_for(cfg)] if cfg else None
+            self._json(200, {"ok": not errors, "errors": errors, "estimate": est, "phases": phases})
         elif path == "/api/start":
             status, reply = self.control.start(body)
             self._json(status, reply)
@@ -146,13 +149,13 @@ def page_config(viewer_url):
         "meo_max_km": ap.MEO_MAX_ALT / 1e3,
         "max_payload_kg": ap.MAX_PAYLOAD,
         "paces": {k: {"powered": v[0], "coast": v[1]} for k, v in ap.PACES.items()},
-        "phases": [{"key": k, "title": t} for k, t in ap.PHASES],
-        "vehicle": ap.VEHICLE,
+        "vehicles": ap.lv.catalog(),
+        "default_vehicle": ap.lv.DEFAULT_VEHICLE,
     }
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Serve the Falcon 9 to MEO mission page.")
+    parser = argparse.ArgumentParser(description="Serve the rocket to MEO mission page.")
     parser.add_argument("--sim", default=DEFAULT_ENDPOINT, help=f"simulation endpoint (default {DEFAULT_ENDPOINT})")
     parser.add_argument("--host", default="127.0.0.1", help="HTTP bind address (default 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8081, help="HTTP port (default 8081)")

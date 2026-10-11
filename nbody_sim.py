@@ -842,6 +842,21 @@ class Simulation:
             return frame, self._body(body)
         raise SimError("frame must be 'inertial' or 'enu'")
 
+    def add_spacecraft(self, spec):
+        """Add a craft from a scenario-style spec (id, mass, ..., initial_state)."""
+        if not isinstance(spec, dict):
+            raise SimError("spacecraft spec must be an object")
+        self._add_initial_spacecraft(spec, len(self.spacecraft))
+        sc = self.spacecraft[str(spec["id"])]
+        self._update_contact(sc, self.time, self.bpos, [])
+        self._record_trail(sc, self.time, self.bpos, self.bvel, force=True)
+        return sc.id
+
+    def remove_spacecraft(self, sc_id):
+        sc = self._craft(sc_id)
+        del self.spacecraft[sc.id]
+        return sc.id
+
     def stage(self, sc_id, children, frame="inertial", body=None):
         parent = self._craft(sc_id)
         if not isinstance(children, list) or len(children) < 2:
@@ -1029,6 +1044,12 @@ class CommandHandler:
         new_ids = self.sim.stage(_require(req, "id", "stage"), _require(req, "children", "stage"),
                                  req.get("frame", "inertial"), req.get("body"))
         return {"removed": req["id"], "created": new_ids}
+
+    def cmd_add_spacecraft(self, req):
+        return {"spacecraft": self.sim.add_spacecraft(_require(req, "spacecraft", "add_spacecraft"))}
+
+    def cmd_remove_spacecraft(self, req):
+        return {"removed": self.sim.remove_spacecraft(_require(req, "id", "remove_spacecraft"))}
 
     def cmd_set_mass(self, req):
         sc_id = _require(req, "id", "set_mass")

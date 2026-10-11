@@ -113,6 +113,23 @@ input[aria-invalid="true"] { border-color: var(--bad); }
 .choices label:has(input:checked) { border-color: var(--primary); }
 .choices small, .check small { display: block; color: var(--muted); font-size: 12px; }
 .choices input, .check input { margin-top: 4px; accent-color: var(--primary); }
+.rockets { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+
+/* ---- Vehicle editor ---- */
+.vehicle { margin: 12px 0 0 32px; }
+.vehicle summary { cursor: pointer; color: var(--primary); }
+.vehicle .help { margin-left: 0; }
+.tag { margin-left: 6px; font-size: 11px; padding: 1px 6px; border-radius: 999px; color: var(--accent);
+  border: 1px solid currentColor; }
+.stage { margin-top: 14px; }
+.stage h4 { margin: 0 0 6px; font-size: 13px; color: var(--text); }
+.stage-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 12px; }
+.field { display: grid; gap: 2px; font-size: 12px; color: var(--muted); min-width: 0; }
+.field-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.field input[type="number"] { width: 100%; min-width: 0; font-size: 14px; padding: 6px 8px; }
+.field .unit { flex: none; font-size: 12px; }
+.derived { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+.derived:empty { display: none; }
 form:disabled, fieldset:disabled { opacity: 0.6; }
 
 .feasibility { margin: 18px 0 0; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--card-2); }
@@ -127,6 +144,8 @@ form:disabled, fieldset:disabled { opacity: 0.6; }
 .feasibility dl { display: grid; grid-template-columns: auto auto; justify-content: start; gap: 2px 18px; margin: 0; font-size: 13px; }
 .feasibility dt { color: var(--muted); }
 .feasibility dd { margin: 0; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+.feasibility dt.sub { padding-left: 12px; }
+.feasibility .note { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
 .errors { color: var(--bad); margin: 12px 0 0; padding-left: 20px; }
 .errors:empty { display: none; }
 
@@ -201,6 +220,6 @@ button.danger { color: var(--bad); border-color: rgba(255, 107, 107, 0.45); }
 @media (max-width: 480px) {
   .card { padding: 16px; }
   .answer, .choices, .help { padding-left: 0; margin-left: 0; }
-  .check { margin-left: 0; }
+  .check, .vehicle { margin-left: 0; }
   input[type="number"] { width: 140px; }
 }

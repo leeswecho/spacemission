@@ -1,4 +1,4 @@
-// Falcon 9 to MEO mission page: questionnaire -> server-side autopilot -> live progress.
+// Rocket to MEO mission page: questionnaire -> server-side autopilot -> live progress.
 
 const POLL_MS = 500;
 const PRESETS = {
@@ -14,12 +14,28 @@ const STATE_LABELS = {
   aborted: ['Aborted', 'bad'],
 };
 
+// Editable vehicle fields: [key, label (as in server messages), unit, scale from display to SI].
+const STAGE_FIELDS = {
+  boosters: [['dry', 'dry mass', 'kg', 1], ['prop', 'propellant', 'kg', 1],
+    ['thrust_sl', 'sea-level thrust', 'kN', 1000], ['thrust_vac', 'vacuum thrust', 'kN', 1000],
+    ['mdot', 'propellant flow', 'kg/s', 1]],
+  core: [['dry', 'dry mass', 'kg', 1], ['prop', 'propellant', 'kg', 1],
+    ['thrust_sl', 'sea-level thrust', 'kN', 1000], ['thrust_vac', 'vacuum thrust', 'kN', 1000],
+    ['mdot', 'propellant flow', 'kg/s', 1]],
+  upper: [['dry', 'dry mass', 'kg', 1], ['prop', 'propellant', 'kg', 1],
+    ['thrust', 'thrust', 'kN', 1000], ['mdot', 'propellant flow', 'kg/s', 1]],
+};
+const STAGE_NAMES = { boosters: 'Booster', core: 'First stage', upper: 'Upper stage' };
+const G0 = 9.80665;
+
 const $ = (id) => document.getElementById(id);
 const ui = {
   simStatus: $('sim-status'), viewerLink: $('viewer-link'),
   form: $('form'), perigee: $('perigee'), apogee: $('apogee'), inclination: $('inclination'), payload: $('payload'),
   reset: $('reset'), launch: $('launch'), feasibility: $('feasibility'), errors: $('errors'),
   meoRange: $('meo-range'), incHelp: $('inc-help'),
+  rockets: $('rockets'), stages: $('stages'), vehicleDetails: $('vehicle-details'),
+  vehicleEdited: $('vehicle-edited'), vehicleReset: $('vehicle-reset'),
   state: $('mission-state'), result: $('result'), phases: $('phases'), telemetry: $('telemetry'),
   telVehicle: $('tel-vehicle'), abort: $('abort'), log: $('log'),
 };
@@ -29,6 +45,10 @@ let viewerBase = null;
 let running = false;
 let lastLogLength = -1;
 let lastLogKey = '';
+let vehicleKey = null;
+let vehicleInputs = [];  // {input, block, key, scale, errorPrefixes}
+let stageBlocks = [];
+let idlePhases = [];
 
 const fmt = (x, digits = 0) => (x === null || x === undefined || !Number.isFinite(x)
   ? '—' : x.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits }));
@@ -43,8 +63,165 @@ function fmtT(seconds) {
   return `T${sign}${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${s.toFixed(1).padStart(4, '0')}`;
 }
 
+// ---------------------------------------------------------------------------
+// Rocket choice and editable figures
+// ---------------------------------------------------------------------------
+
+function vehicles() {
+  return config?.vehicles ?? {};
+}
+
+function renderRockets() {
+  const entries = Object.entries(vehicles());
+  ui.rockets.replaceChildren(...entries.map(([key, v]) => {
+    const label = document.createElement('label');
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = 'vehicle';
+    input.value = key;
+    input.checked = key === vehicleKey;
+    input.addEventListener('change', () => selectVehicle(key));
+    const text = document.createElement('span');
+    const name = document.createElement('strong');
+    name.textContent = v.name;
+    const small = document.createElement('small');
+    small.textContent = `${v.maker} · ${v.summary}`;
+    text.append(name, small);
+    label.append(input, text);
+    return label;
+  }));
+}
+
+const roundFor = (x) => Number(x.toPrecision(6));
+
+function numberField(labelText, unit, value, attrs = {}) {
+  const wrap = document.createElement('label');
+  wrap.className = 'field';
+  const name = document.createElement('span');
+  name.className = 'field-name';
+  name.textContent = labelText;
+  const row = document.createElement('span');
+  row.className = 'field-row';
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.inputMode = 'decimal';
+  input.step = attrs.step ?? 'any';
+  if (attrs.min !== undefined) input.min = attrs.min;
+  if (attrs.max !== undefined) input.max = attrs.max;
+  input.value = value;
+  input.dataset.default = String(value);
+  const u = document.createElement('span');
+  u.className = 'unit';
+  u.textContent = unit;
+  row.append(input, u);
+  wrap.append(name, row);
+  return { wrap, input };
+}
+
+function stageBlock(title) {
+  const box = document.createElement('section');
+  box.className = 'stage';
+  const h = document.createElement('h4');
+  h.textContent = title;
+  const grid = document.createElement('div');
+  grid.className = 'stage-grid';
+  const derived = document.createElement('p');
+  derived.className = 'derived';
+  box.append(h, grid, derived);
+  return { box, grid, derived, block: null };
+}
+
+function renderStages() {
+  const v = vehicles()[vehicleKey];
+  vehicleInputs = [];
+  stageBlocks = [];
+  if (!v) {
+    ui.stages.replaceChildren();
+    return;
+  }
+  for (const block of ['boosters', 'core', 'upper']) {
+    const st = v[block];
+    if (!st) continue;
+    const b = stageBlock(block === 'boosters' ? 'Boosters (figures per booster)' : STAGE_NAMES[block]);
+    b.block = block;
+    if (block === 'boosters') {
+      const { wrap, input } = numberField('Number of boosters', `of ${st.max_count} max`, st.count,
+        { step: 1, min: 0, max: st.max_count });
+      b.grid.append(wrap);
+      vehicleInputs.push({ input, block, key: 'count', scale: 1, errorPrefixes: ['Number of boosters'] });
+    }
+    for (const [key, label, unit, scale] of STAGE_FIELDS[block]) {
+      const name = label[0].toUpperCase() + label.slice(1);
+      const { wrap, input } = numberField(name, unit, roundFor(st[key] / scale));
+      b.grid.append(wrap);
+      const stage = STAGE_NAMES[block];
+      const prefixes = [`${stage} ${label}`];
+      if (key.startsWith('thrust') || key === 'mdot') prefixes.push(`${stage} thrust and propellant flow`);
+      if (key === 'thrust_sl' || key === 'thrust_vac') prefixes.push(`${stage} sea-level thrust cannot`);
+      vehicleInputs.push({ input, block, key, scale, errorPrefixes: prefixes });
+    }
+    if (block === 'core' && st.boost_throttle !== undefined) {
+      const { wrap, input } = numberField('Throttle while boosters burn', '%', Math.round(st.boost_throttle * 100),
+        { step: 1, min: 30, max: 100 });
+      b.grid.append(wrap);
+      vehicleInputs.push({ input, block, key: 'boost_throttle', scale: 0.01, errorPrefixes: ['Core throttle'] });
+    }
+    stageBlocks.push(b);
+  }
+  const other = stageBlock('Other');
+  for (const [key, label, unit, prefix] of [['fairing', 'Fairing mass', 'kg', 'Fairing mass'],
+    ['kick_angle', 'Pitch kick at 60 m/s', '°', 'Pitch kick']]) {
+    const { wrap, input } = numberField(label, unit, v[key]);
+    other.grid.append(wrap);
+    vehicleInputs.push({ input, block: null, key, scale: 1, errorPrefixes: [prefix] });
+  }
+  other.derived.textContent = 'Rockets with a low liftoff thrust-to-weight need a smaller pitch kick.';
+  stageBlocks.push(other);
+  ui.stages.replaceChildren(...stageBlocks.map((b) => b.box));
+  updateDerived();
+}
+
+function vehicleConfig() {
+  const out = {};
+  for (const { input, block, key, scale } of vehicleInputs) {
+    const x = input.value === '' ? null : Number(input.value) * scale;
+    if (block) (out[block] ??= {})[key] = x;
+    else out[key] = x;
+  }
+  return out;
+}
+
+function updateDerived() {
+  const cfg = vehicleConfig();
+  const edited = vehicleInputs.some(({ input }) => input.value !== input.dataset.default);
+  ui.vehicleEdited.classList.toggle('hidden', !edited);
+  for (const b of stageBlocks) {
+    if (!b.block) continue;
+    const st = cfg[b.block];
+    const isp = (st.thrust_vac ?? st.thrust) / (st.mdot * G0);
+    const burn = st.prop / st.mdot;
+    b.derived.textContent = Number.isFinite(isp) && Number.isFinite(burn)
+      ? `Vacuum Isp ${fmt(isp)} s · burns for ${fmt(burn)} s at full flow`
+      : '';
+  }
+}
+
+function selectVehicle(key) {
+  vehicleKey = key;
+  for (const r of ui.rockets.querySelectorAll('input')) r.checked = r.value === key;
+  renderStages();
+  scheduleValidate();
+}
+
+ui.vehicleReset.addEventListener('click', () => {
+  renderStages();
+  scheduleValidate();
+});
+
 function formValues() {
   return {
+    vehicle: vehicleKey,
+    vehicle_config: vehicleConfig(),
     perigee_km: Number(ui.perigee.value),
     apogee_km: Number(ui.apogee.value),
     inclination_deg: Number(ui.inclination.value),
@@ -77,7 +254,14 @@ function renderErrors(errors) {
   ui.perigee.setAttribute('aria-invalid', String(bad('Perigee')));
   ui.apogee.setAttribute('aria-invalid', String(bad('Apogee')));
   ui.inclination.setAttribute('aria-invalid', String(bad('From Cape') || bad('Inclination')));
-  ui.payload.setAttribute('aria-invalid', String(bad('Payload')));
+  ui.payload.setAttribute('aria-invalid', String(bad('Payload') || bad('Liftoff thrust')));
+  let vehicleBad = false;
+  for (const { input, errorPrefixes } of vehicleInputs) {
+    const own = errorPrefixes.some(bad) || bad('The first stage would run out');
+    input.setAttribute('aria-invalid', String(own));
+    vehicleBad ||= own;
+  }
+  if (vehicleBad) ui.vehicleDetails.open = true;
 }
 
 function renderFeasibility(est) {
@@ -97,8 +281,10 @@ function renderFeasibility(est) {
   }[kind];
   const rows = [
     ['Liftoff mass', `${fmt(est.liftoff_mass)} kg`],
-    ['Upper stage Δv needed', `${fmt(est.dv_needed / 1000, 2)} km/s`],
-    ['Upper stage Δv available', `${fmt(est.s2_capacity / 1000, 2)} km/s`],
+    ['Liftoff thrust-to-weight', fmt(est.liftoff_tw, 2)],
+    ['Δv needed (incl. ~1.7 km/s of losses)', `${fmt(est.dv_needed / 1000, 2)} km/s`],
+    ['Δv available (ideal, all stages)', `${fmt(est.dv_available / 1000, 2)} km/s`],
+    ...est.stages.map((st) => [`· ${st.label}`, `${fmt(st.dv / 1000, 2)} km/s`]),
     ['Margin', `${est.margin >= 0 ? '+' : ''}${fmt(est.margin)} m/s`],
     ['Estimated max payload for this orbit', `≈ ${fmt(est.max_payload)} kg`],
   ];
@@ -106,11 +292,15 @@ function renderFeasibility(est) {
   for (const [k, v] of rows) {
     const dt = document.createElement('dt');
     dt.textContent = k;
+    if (k.startsWith('·')) dt.className = 'sub';
     const dd = document.createElement('dd');
     dd.textContent = v;
     dl.append(dt, dd);
   }
-  ui.feasibility.replaceChildren(verdict, dl);
+  const note = document.createElement('p');
+  note.className = 'note';
+  note.textContent = 'A rough estimate: actual losses depend on the rocket and its trajectory.';
+  ui.feasibility.replaceChildren(verdict, dl, note);
 }
 
 let validateTimer = null;
@@ -124,6 +314,7 @@ function scheduleValidate() {
       if (seq !== validateSeq) return;  // a newer edit is already being checked
       renderErrors(reply.errors ?? []);
       renderFeasibility(reply.estimate);
+      if (reply.phases) idlePhases = reply.phases.map((p) => ({ ...p, state: 'pending' }));
       updateLaunchButton(reply.errors?.length ?? 1);
     } catch {
       renderErrors(['Mission server unreachable.']);
@@ -137,7 +328,10 @@ function updateLaunchButton(errorCount = formErrorCount) {
   ui.launch.disabled = running || errorCount > 0;
 }
 
-ui.form.addEventListener('input', scheduleValidate);
+ui.form.addEventListener('input', (e) => {
+  if (ui.stages.contains(e.target)) updateDerived();
+  scheduleValidate();
+});
 for (const btn of document.querySelectorAll('[data-preset]')) {
   btn.addEventListener('click', () => {
     const p = PRESETS[btn.dataset.preset];
@@ -152,7 +346,8 @@ ui.form.addEventListener('submit', async (e) => {
   e.preventDefault();
   if (running) return;
   const values = formValues();
-  if (values.reset === false && !confirm('Launch without resetting? The Falcon 9 must still be on the pad.')) return;
+  if (values.reset === false && !confirm('Launch without resetting? Whatever stands on the LC-39A pad is replaced by the '
+    + 'new rocket. Other craft are left alone, but none may already use this flight\'s IDs.')) return;
   ui.launch.disabled = true;
   try {
     const reply = await postJSON('/api/start', values);
@@ -306,7 +501,7 @@ async function poll(once = false) {
     updateLaunchButton();
 
     const t0 = launchTime(snap.log);
-    renderPhases(snap.phases);
+    renderPhases(snap.state === 'idle' ? idlePhases : snap.phases);
     renderTelemetry(snap.telemetry, t0);
     renderLog(snap.log, t0);
     renderResult(snap);
@@ -331,8 +526,9 @@ async function poll(once = false) {
   const minInc = Math.ceil(lat * 10) / 10;
   ui.incHelp.textContent = `Launching from Cape Canaveral (${lat.toFixed(1)}° N), the inclination must be between `
     + `${minInc}° and ${(180 - minInc).toFixed(1)}°. GPS uses 55°, Galileo 56°, GLONASS 64.8°.`;
-  if (!config.phases) renderPhases([]);
-  else renderPhases(config.phases.map((p) => ({ ...p, state: 'pending' })));
+  vehicleKey = config.default_vehicle ?? Object.keys(vehicles())[0] ?? null;
+  renderRockets();
+  renderStages();
   updateViewerLink(null);
   scheduleValidate();
   poll();

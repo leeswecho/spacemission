@@ -92,6 +92,12 @@ class SimClient:
     def stage(self, sc_id, children, frame="inertial", body=None):
         return self.call("stage", id=sc_id, children=children, frame=frame, body=body)
 
+    def add_spacecraft(self, spec):
+        return self.call("add_spacecraft", spacecraft=spec)["spacecraft"]
+
+    def remove_spacecraft(self, sc_id):
+        return self.call("remove_spacecraft", id=sc_id)
+
     def reset(self):
         return self.call("reset")
 
