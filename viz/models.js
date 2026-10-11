@@ -44,11 +44,19 @@ const VEHICLES = {
   },
   new_glenn: {
     core: {
-      d: 7.0, l: 57.5, color: WHITE, band: 0x1d2b4a,
-      // Two long aft strakes, and four actuated fins just below the interstage.
+      d: 7.0, l: 57.5, color: WHITE,
+      // Aft section flaring out to ~8.2 m at the base, topped by a lavender ring.
+      aft: [
+        { y0: 0, y1: 10.0, d0: 8.2, d1: 7.9, color: 0x5d6067 },
+        { y0: 10.0, y1: 11.4, d0: 7.9, d1: 7.0, color: 0x9a9fe0 },
+      ],
+      // Two strakes low on the stage, and four fins below the interstage; one pair of fins
+      // lines up with the strakes.  Outlines are [out from the skin, height above the base].
       surfaces: [
-        { count: 2, angle: 0, y: 1.6, outline: [[0, 0], [2.6, 0], [2.6, 2.5], [0, 14.0]], color: 0xd4d7db },
-        { count: 4, angle: 45, y: 46.0, outline: [[0, 0], [2.4, 1.2], [2.4, 3.0], [0, 4.2]], color: 0x3b3f47 },
+        { count: 2, angle: 0, thickness: 0.4, color: 0xc9cdd3,
+          outline: [[0, 4.6], [2.4, 13.2], [2.4, 19.6], [0, 26.4]] },
+        { count: 4, angle: 0, thickness: 0.8, color: 0xc9cdd3,
+          outline: [[0, 50.7], [1.9, 52.6], [1.9, 54.0], [0, 56.4]] },
       ],
     },
     upper: { d: 7.0, l: 23.4, color: WHITE },
@@ -92,16 +100,21 @@ function ogive(d, l, straight, color, y0) {
 function coreStage(v, group, y0) {
   const c = v.core;
   group.add(cylinder(c.d, c.l, c.color, y0));
-  group.add(cylinder(c.d * 1.01, 1.6, ENGINE, y0));                    // engine section
+  if (c.aft) {
+    for (const a of c.aft) group.add(cone(a.d0, a.d1, a.y1 - a.y0, a.color, y0 + a.y0));
+  } else {
+    group.add(cylinder(c.d * 1.01, 1.6, ENGINE, y0));                  // engine section
+  }
   if (c.band) group.add(cylinder(c.d * 1.01, c.l * 0.08, c.band, y0 + c.l * 0.92));  // interstage
   for (const surf of c.surfaces ?? []) aeroSurfaces(surf, c.d / 2, group, y0);
   return y0 + c.l;
 }
 
-// Flat plates (strakes, fins) spaced evenly around a stage.  `outline` is the planform as
-// [outward from the skin, up the stage] points in metres, with the root along the skin.
+// Flat plates (strakes, fins) spaced evenly around a stage, the first at `angle` degrees.
+// `outline` is the planform as [outward from the skin, height above the stage base] points
+// in metres, with the root along the skin.
 function aeroSurfaces(surf, radius, group, y0) {
-  const thickness = 0.3;
+  const thickness = surf.thickness ?? 0.3;
   const shape = new THREE.Shape(surf.outline.map(([x, y]) => new THREE.Vector2(x, y)));
   const geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
   geometry.translate(0, 0, -thickness / 2);
@@ -109,7 +122,7 @@ function aeroSurfaces(surf, radius, group, y0) {
     const a = THREE.MathUtils.degToRad(surf.angle) + (i / surf.count) * Math.PI * 2;
     const m = new THREE.Mesh(i === 0 ? geometry : geometry.clone(), material(surf.color));
     m.rotation.y = -a;  // local +X (outward) -> (cos a, 0, sin a)
-    m.position.set(Math.cos(a) * (radius - 0.05), y0 + surf.y, Math.sin(a) * (radius - 0.05));
+    m.position.set(Math.cos(a) * (radius - 0.05), y0, Math.sin(a) * (radius - 0.05));
     group.add(m);
   }
 }
