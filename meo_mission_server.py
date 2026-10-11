@@ -111,8 +111,26 @@ class Handler(SimpleHTTPRequestHandler):
             snap = self.control.status.snapshot()
             snap["sim"] = self.control.sim_status()
             self._json(200, snap)
+        elif path == "/api/mission/commands.txt":
+            self._command_log()
         else:
             super().do_GET()
+
+    def _command_log(self):
+        """The finished mission's command log as a text download."""
+        status = self.control.status
+        if status.state not in ("succeeded", "failed", "aborted"):
+            self._json(409, {"ok": False, "errors": ["No finished mission to report on."]})
+            return
+        body = status.command_report().encode("utf-8")
+        name = f"mission-{status.params['vehicle']}-{status.started:%Y%m%d-%H%M%S}.txt"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_POST(self):
         path = self.path.split("?", 1)[0]

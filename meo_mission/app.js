@@ -443,10 +443,18 @@ function renderLog(log, t0) {
   }));
 }
 
+let lastResultKey = '';
 function renderResult(snap) {
   const done = ['succeeded', 'failed', 'aborted'].includes(snap.state);
   ui.result.classList.toggle('hidden', !done);
-  if (!done) return;
+  if (!done) {
+    lastResultKey = '';
+    return;
+  }
+  // Rebuild only when the outcome changes, so the download link isn't replaced under the pointer.
+  const key = JSON.stringify([snap.state, snap.message, snap.result, snap.log.length]);
+  if (key === lastResultKey) return;
+  lastResultKey = key;
   ui.result.className = `result ${snap.state === 'succeeded' ? 'success' : 'failure'}`;
   const h = document.createElement('h3');
   h.textContent = snap.message ?? snap.state;
@@ -485,6 +493,16 @@ function renderResult(snap) {
       parts.push(p);
     }
   }
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  const download = document.createElement('a');
+  download.className = 'button';
+  download.href = '/api/mission/commands.txt';
+  download.download = '';
+  download.textContent = 'Download command log';
+  download.title = 'Every command the autopilot sent to the simulation, with times, as a text file';
+  actions.append(download);
+  parts.push(actions);
   ui.result.replaceChildren(...parts);
 }
 

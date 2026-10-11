@@ -31,6 +31,8 @@ Guidance after the gravity turn uses Earth-centred inertial vectors
 (position/velocity relative to Earth, non-rotating) and Earth's spin axis.
 """
 
+import datetime
+import inspect
 import math
 import threading
 import time
@@ -288,6 +290,102 @@ def target_plane_normal(r, v, pole, inc_deg):
 
 
 # ---------------------------------------------------------------------------
+# Command log: every control command sent to the simulation, in plain words
+# ---------------------------------------------------------------------------
+
+CONTROL_COMMANDS = ("reset", "add_spacecraft", "remove_spacecraft", "set_mass", "set_thrust", "stage")
+
+
+class RecordingClient:
+    """Wraps a SimClient; control commands are passed on, then reported to record(cmd, args)."""
+
+    def __init__(self, client, record):
+        self._client = client
+        self._record = record
+
+    def __getattr__(self, name):
+        attr = getattr(self._client, name)
+        if name not in CONTROL_COMMANDS:
+            return attr
+
+        def call(*args, **kwargs):
+            result = attr(*args, **kwargs)
+            bound = inspect.signature(attr).bind(*args, **kwargs)
+            bound.apply_defaults()
+            self._record(name, dict(bound.arguments))
+            return result
+
+        return call
+
+
+def _parts(model):
+    if not isinstance(model, dict) or not model.get("parts"):
+        return ""
+    parts = list(model["parts"])
+    if "boosters" in parts and model.get("boosters"):
+        parts[parts.index("boosters")] = f"{model['boosters']} boosters"
+    return " [" + ", ".join(parts) + "]"
+
+
+def describe_command(cmd, a, note=None):
+    """One human-readable line for a control command and its arguments."""
+    if cmd == "reset":
+        return "reset: the simulation is reloaded from its scenario file."
+    if cmd == "remove_spacecraft":
+        return f"remove_spacecraft '{a['sc_id']}': the craft is taken out of the simulation."
+    if cmd == "set_mass":
+        dry = "" if a.get("dry_mass") is None else f", {a['dry_mass']:,.0f} kg without propellant"
+        return f"set_mass '{a['sc_id']}': {a['mass']:,.0f} kg{dry}."
+    if cmd == "add_spacecraft":
+        spec = a["spec"]
+        init = spec.get("initial_state", {})
+        where = ""
+        if init.get("frame") == "surface":
+            where = (f" on the surface of {init.get('body')} at latitude {init.get('latitude'):.5f}°, "
+                     f"longitude {init.get('longitude'):.5f}°")
+        dry = spec.get("dry_mass", 0.0)
+        return (f"add_spacecraft '{spec['id']}'{_parts(spec.get('model'))}{where}: {spec['mass']:,.0f} kg "
+                f"({spec['mass'] - dry:,.0f} kg of it propellant), drag reference area "
+                f"{spec.get('reference_area', 0.0):.1f} m².")
+    if cmd == "set_thrust":
+        f = np.array(a["force"], dtype=float)
+        mag = float(np.linalg.norm(f))
+        flow = -float(a.get("mass_rate") or 0.0)
+        if mag == 0.0 and flow == 0.0:
+            return f"set_thrust '{a['sc_id']}': engines off."
+        if a.get("frame") == "enu":
+            e, n, u = f
+            pitch = math.degrees(math.atan2(u, math.hypot(e, n)))
+            heading = math.degrees(math.atan2(e, n)) % 360.0
+            direction = (f"pitch {pitch:.1f}° above the horizon, heading {heading:.1f}° "
+                         f"(local east-north-up frame of {a.get('body')})")
+        else:
+            d = f / mag if mag else f
+            direction = f"inertial direction ({d[0]:+.4f}, {d[1]:+.4f}, {d[2]:+.4f})"
+        text = f"set_thrust '{a['sc_id']}': {mag / 1e3:,.1f} kN, {direction}; propellant flow {flow:,.1f} kg/s"
+        return text + (f"; {note}." if note else ".")
+    if cmd == "stage":
+        kids = []
+        for c in a["children"]:
+            dv = float(np.linalg.norm(c.get("delta_v", [0.0, 0.0, 0.0])))
+            push = f", pushed {dv:.1f} m/s" if dv else ""
+            kids.append(f"'{c['id']}'{_parts(c.get('model'))} {c['mass']:,.0f} kg{push}")
+        return f"stage '{a['sc_id']}' into " + "; ".join(kids) + "."
+    return f"{cmd} {a}"
+
+
+def _mission_clock(t, t0):
+    if t0 is None:
+        return f"t={t:,.1f} s"
+    d = t - t0
+    sign = "-" if d < -1e-9 else "+"
+    s = abs(d)
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    return f"T{sign}{int(h):02d}:{int(m):02d}:{sec:04.1f}"
+
+
+# ---------------------------------------------------------------------------
 # Shared mission status (read by the web server, written by the autopilot)
 # ---------------------------------------------------------------------------
 
@@ -306,6 +404,8 @@ class MissionStatus:
         self.result = None
         self.message = None
         self.vehicle = None
+        self.commands = []        # (sim time, text)
+        self.started = None       # wall-clock start (UTC datetime)
 
     def begin(self, params, est):
         cfg = params["vehicle_config"]
@@ -320,6 +420,8 @@ class MissionStatus:
             self.result = None
             self.message = None
             self.vehicle = cfg["id"]
+            self.commands = []
+            self.started = datetime.datetime.now(datetime.timezone.utc)
 
     def phase(self, key):
         with self.lock:
@@ -335,6 +437,10 @@ class MissionStatus:
         with self.lock:
             self.log.append({"t": t, "text": text, "kind": kind, "wall": time.time()})
             del self.log[:-self.MAX_LOG]
+
+    def add_command(self, t, text):
+        with self.lock:
+            self.commands.append((t, text))
 
     def set_telemetry(self, tel, vehicle=None):
         with self.lock:
@@ -360,6 +466,60 @@ class MissionStatus:
                 return True
             return False
 
+    def command_report(self):
+        """Plain-text report of a finished mission: setup, outcome, flight log, every command."""
+        with self.lock:
+            p, est, result = self.params, self.estimate, self.result
+            log, commands = list(self.log), list(self.commands)
+            state, message, started = self.state, self.message, self.started
+        cfg = p["vehicle_config"]
+        t0 = next((e["t"] for e in log if e["text"].startswith("Ignition and liftoff")), None)
+        out = ["MISSION COMMAND LOG", "=" * 19, ""]
+        out.append(f"Mission started: {started:%Y-%m-%d %H:%M:%S} UTC (wall clock)" if started else "")
+        out.append(f"Outcome:         {state} - {message}")
+        out.append(f"Rocket:          {cfg['name']} (craft ID '{cfg['id']}')")
+        out.append(f"Target orbit:    {p['perigee_km']:,.0f} x {p['apogee_km']:,.0f} km at "
+                   f"{p['inclination_deg']:.2f} deg inclination")
+        out.append(f"Payload:         {p['payload_kg']:,.0f} kg")
+        out.append(f"Pace:            {p['pace']}" + ("   (simulation reset before launch)" if p["reset"] else ""))
+        if result:
+            ach = result.get("apogee_km")
+            out.append(f"Achieved orbit:  {result['perigee_km']:,.1f} x "
+                       + (f"{ach:,.1f} km" if ach is not None else "escape")
+                       + f" at {result['inclination_deg']:.3f} deg (craft '{result['craft']}')")
+            if result.get("propellant_left_kg") is not None:
+                out.append(f"Upper-stage propellant left: {result['propellant_left_kg']:,.0f} kg")
+        if est:
+            out.append(f"Pre-launch estimate: liftoff mass {est['liftoff_mass']:,.0f} kg, "
+                       f"thrust-to-weight {est['liftoff_tw']:.2f}, delta-v margin {est['margin']:+,.0f} m/s")
+
+        out += ["", "Vehicle configuration", "-" * 21]
+        names = {"boosters": "Boosters (each)", "core": "First stage", "upper": "Upper stage"}
+        for block in ("boosters", "core", "upper"):
+            st = cfg.get(block)
+            if not st or (block == "boosters" and not st.get("count")):
+                continue
+            thrust = (f"thrust {st['thrust_sl'] / 1e3:,.0f} kN sea level / {st['thrust_vac'] / 1e3:,.0f} kN vacuum"
+                      if "thrust_sl" in st else f"thrust {st['thrust'] / 1e3:,.1f} kN")
+            count = f" x{st['count']}" if block == "boosters" else ""
+            out.append(f"{names[block]}{count}: dry {st['dry']:,.0f} kg, propellant {st['prop']:,.0f} kg, "
+                       f"{thrust}, propellant flow {st['mdot']:,.1f} kg/s")
+        out.append(f"Fairing {cfg['fairing']:,.0f} kg; pitch kick {cfg['kick_angle']:g} deg")
+
+        out += ["", "Times: T is mission time from ignition (T+hh:mm:ss.s); t is simulation time in seconds.",
+                "Inertial directions are unit vectors in the simulation frame (J2000 ecliptic: x toward the",
+                "vernal equinox, z toward ecliptic north); pitch and heading are relative to the local horizon.",
+                "", "Flight log", "-" * 10]
+        for e in log:
+            out.append(f"{_mission_clock(e['t'], t0):>14}  {e['text']}")
+
+        out += ["", f"Commands sent to the simulation ({len(commands)})", "-" * 40,
+                "Control commands only; the autopilot also steps the simulation and reads craft states.",
+                "Thrust is re-commanded every guidance update (every 0.5 s of powered flight).", ""]
+        for t, text in commands:
+            out.append(f"{_mission_clock(t, t0):>14}  t={t:>12,.1f}  {text}")
+        return "\n".join(out) + "\n"
+
     def snapshot(self):
         with self.lock:
             return {
@@ -382,7 +542,8 @@ class MissionStatus:
 
 class MeoMission:
     def __init__(self, client, params, status):
-        self.sim = client
+        self.sim = RecordingClient(client, self._record_command)
+        self.thrust_note = None
         self.p = params
         self.status = status
         self.warp = PACES[params["pace"]]
@@ -427,12 +588,18 @@ class MeoMission:
         if self.status.abort_requested:
             raise MissionAborted()
 
-    def thrust(self, force, mass_rate, frame="inertial", body=None):
+    def _record_command(self, cmd, args):
+        note = self.thrust_note if cmd == "set_thrust" else None
+        self.status.add_command(self.t, describe_command(cmd, args, note))
+
+    def thrust(self, force, mass_rate, frame="inertial", body=None, note=None):
         self.last_thrust = ([float(x) for x in force], mass_rate, frame, body)
+        self.thrust_note = note
         self.sim.set_thrust(self.vehicle, *self.last_thrust)
 
     def cut(self, vehicle=None):
         self.last_thrust = None
+        self.thrust_note = None
         self.sim.set_thrust(vehicle or self.vehicle, [0.0, 0.0, 0.0], 0.0)
 
     def step(self, dt, powered=True):
@@ -561,6 +728,7 @@ class MeoMission:
 
     def _reapply_thrust(self):
         if self.last_thrust:
+            self.thrust_note = "re-applied to the craft that continues after the separation"
             self.sim.set_thrust(self.vehicle, *self.last_thrust)
 
     def _maybe_jettison_fairing(self, sc, r, v):
@@ -986,7 +1154,9 @@ class MeoMission:
             a_n = max(-0.3 * a_T, min(0.3 * a_T, -v_n / 20.0))
             a_in = math.sqrt(max(a_T**2 - a_n**2, 0.0))
             direction = (a_in * (math.sin(phi) * up + math.cos(phi) * t_hat) + a_n * n) / a_T
-            self.thrust(direction * thrust, mdot)
+            self.thrust(direction * thrust, mdot,
+                        note=f"closed-loop guidance: pitch {math.degrees(phi):.1f}° above the local "
+                             f"horizontal in the target plane, about {max(t_go, 0.0):,.0f} s of burn to go")
             self._maybe_jettison_fairing(sc, r, v)
             self.step(self._tick())
 
@@ -1004,7 +1174,8 @@ class MeoMission:
                 return el
             thrust, mdot = self._engine(sc)
             a_T = thrust / sc["mass"]
-            self.thrust(v_go / v_go_n * thrust, mdot)
+            self.thrust(v_go / v_go_n * thrust, mdot,
+                        note=f"{note}: along the velocity still to be gained ({v_go_n:,.1f} m/s)")
             self._maybe_jettison_fairing(sc, r, v)
             # Shorten the last steps so the cutoff lands close to the target.
             self.step(max(0.02, min(TICK, v_go_n / a_T)))

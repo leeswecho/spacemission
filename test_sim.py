@@ -428,6 +428,21 @@ class MeoAutopilotTest(unittest.TestCase):
         t_apo = ap.time_to_apoapsis(np.array([r_p, 0, 0]), np.array([0, vp, 0]), mu)
         self.assertAlmostEqual(t_apo, math.pi * math.sqrt(a**3 / mu), delta=1.0)
 
+    def test_command_descriptions(self):
+        import meo_autopilot as ap
+        text = ap.describe_command("set_thrust", {"sc_id": "x", "force": [0.0, 1e6, 1e6], "mass_rate": -300.0,
+                                                  "frame": "enu", "body": "earth"})
+        self.assertIn("1,414.2 kN, pitch 45.0° above the horizon, heading 0.0°", text)
+        self.assertIn("propellant flow 300.0 kg/s", text)
+        self.assertEqual(ap.describe_command("set_thrust", {"sc_id": "x", "force": [0, 0, 0], "mass_rate": 0.0,
+                                                            "frame": "inertial", "body": None}),
+                         "set_thrust 'x': engines off.")
+        text = ap.describe_command("stage", {"sc_id": "v", "frame": "inertial", "body": None, "children": [
+            {"id": "v_boosters", "mass": 20000.0, "delta_v": [1.0, 0, 0],
+             "model": {"parts": ["boosters"], "boosters": 4}},
+            {"id": "v", "mass": 1e5}]})
+        self.assertEqual(text, "stage 'v' into 'v_boosters' [4 boosters] 20,000 kg, pushed 1.0 m/s; 'v' 100,000 kg.")
+
     def test_pacing_holds_warp_through_long_steps(self):
         import meo_autopilot as ap
 
@@ -541,6 +556,8 @@ class MissionServerTest(unittest.TestCase):
 
             good = {"perigee_km": 20180, "apogee_km": 20180, "inclination_deg": 55, "payload_kg": 4300,
                     "pace": "watch", "reset": True}
+            status, _ = self.request("/api/mission/commands.txt")
+            self.assertEqual(status, 409)  # nothing has flown yet
             status, config = self.request("/api/config")
             self.assertIn("sls", config["vehicles"])
             status, reply = self.request("/api/validate", good)
@@ -567,6 +584,13 @@ class MissionServerTest(unittest.TestCase):
                     break
                 time.sleep(0.2)
             self.assertEqual(snap["state"], "aborted")
+            with urllib.request.urlopen(f"http://127.0.0.1:{self.PORT}/api/mission/commands.txt", timeout=10) as res:
+                self.assertIn("attachment", res.headers["Content-Disposition"])
+                report = res.read().decode("utf-8")
+            self.assertIn("Outcome:         aborted", report)
+            self.assertIn("add_spacecraft 'falcon9'", report)
+            self.assertIn("set_thrust 'falcon9':", report)
+            self.assertTrue(report.rstrip().endswith("engines off."))
         finally:
             for p in (srv, sim):
                 p.kill()

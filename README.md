@@ -273,7 +273,11 @@ As you type, the page validates the answers. It also shows a rough feasibility e
 mission with ordinary sim commands, so it keeps flying if the page is closed, and every open
 page sees the same flight. Only one mission runs at a time. The page shows the phase checklist,
 live telemetry, the flight log, and finally target against achieved orbit. **Abort** shuts the
-engines down immediately.
+engines down immediately. Once a mission has ended (succeeded, failed or aborted), **Download command log**
+(`GET /api/mission/commands.txt`) saves a plain-text report. It covers the setup, the outcome,
+the flight log, and every control command the autopilot sent to the simulation, with its
+mission and simulation time and a plain-English description: reset, craft added or removed,
+each thrust setting with direction and propellant flow, and every staging.
 
 Flight profile:
 1. **Configure:** whatever stands on the LC-39A pad is removed (`remove_spacecraft`), and the

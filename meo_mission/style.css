@@ -160,6 +160,16 @@ button {
   cursor: pointer;
 }
 button:hover { border-color: var(--muted); }
+a.button {
+  display: inline-block;
+  color: var(--text);
+  background: var(--card-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  text-decoration: none;
+}
+a.button:hover { border-color: var(--muted); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 button.primary { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; padding: 10px 20px; font-size: 15px; }
 button.danger { color: var(--bad); border-color: rgba(255, 107, 107, 0.45); }
