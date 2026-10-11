@@ -28,6 +28,11 @@ const BODY_COLORS = {
   mars: '#c1440e', jupiter: '#d8b48a', saturn: '#e3cf98', uranus: '#9fdde4', neptune: '#4f74e3',
 };
 const CRAFT_COLOR = '#ff9f43';
+// Surface maps (equirectangular, longitude -180..180 left to right, north up).
+// earth.jpg: NASA Blue Marble Next Generation, December 2004, with topography and bathymetry
+// (public domain, NASA Earth Observatory), resized to 4096 x 2048.
+const BODY_TEXTURES = { earth: 'textures/earth.jpg' };
+const GRID_ON_TEXTURE = 0.6;  // lat/lon grid strength over a surface map
 
 function colorFor(id) {
   if (BODY_COLORS[id]) return BODY_COLORS[id];
@@ -106,6 +111,8 @@ uniform vec3 uColor;
 uniform mat3 uViewToBody;  // view space -> body-fixed (x: prime meridian, z: pole)
 uniform float uEmissive;
 uniform float uGrid;
+uniform sampler2D uMap;
+uniform float uHasMap;
 uniform float uLogDepthFC;
 varying vec3 vViewPos;
 
@@ -133,12 +140,22 @@ void main() {
     col = uColor * (0.55 + 0.45 * max(dot(n, -dir), 0.0));
   } else {
     float diff = max(dot(n, uSunDir), 0.0);
-    col = uColor * (0.10 + 0.90 * diff);
+    vec3 nb = uViewToBody * n;
+    float lat = asin(clamp(nb.z, -1.0, 1.0));
+    float lon = atan(nb.y, nb.x);
+    float lon2 = atan(-nb.y, -nb.x);  // same derivatives, but no jump at +-180 deg
+    vec3 base = uColor;
+    if (uHasMap > 0.5) {
+      vec2 uv = vec2(lon / 6.28318530718 + 0.5, lat / 3.14159265359 + 0.5);
+      vec2 scale = vec2(1.0 / 6.28318530718, 1.0 / 3.14159265359);
+      float lx = abs(dFdx(lon)) < abs(dFdx(lon2)) ? dFdx(lon) : dFdx(lon2);
+      float ly = abs(dFdy(lon)) < abs(dFdy(lon2)) ? dFdy(lon) : dFdy(lon2);
+      base = textureGrad(uMap, uv, vec2(lx, dFdx(lat)) * scale, vec2(ly, dFdy(lat)) * scale).rgb;
+    }
+    // A surface map stays faintly visible on the night side, for orientation.
+    float night = uHasMap > 0.5 ? 0.22 : 0.10;
+    col = base * (night + (1.0 - night) * diff);
     if (uGrid > 0.0) {
-      vec3 nb = uViewToBody * n;
-      float lat = asin(clamp(nb.z, -1.0, 1.0));
-      float lon = atan(nb.y, nb.x);
-      float lon2 = atan(-nb.y, -nb.x);
       float lonFade = 1.0 - smoothstep(0.85, 0.97, abs(nb.z));
       float g = 0.0;
       g = max(g, 0.45 * gridLevel(lon, lon2, lat, radians(30.0), lonFade));
@@ -172,12 +189,30 @@ function makeBodyMesh(color, emissive) {
       uViewToBody: { value: new THREE.Matrix3() },
       uEmissive: { value: emissive ? 1 : 0 },
       uGrid: { value: emissive ? 0 : 1 },
+      uMap: { value: null },
+      uHasMap: { value: 0 },
       uLogDepthFC: { value: LOG_DEPTH_FC },
     },
   });
   const mesh = new THREE.Mesh(boxGeometry, mat);
   mesh.frustumCulled = false;
   return mesh;
+}
+
+const textureLoader = new THREE.TextureLoader();
+
+// Load a body's surface map; until it arrives (or if it fails) the body keeps its flat colour.
+function applyBodyTexture(id, mesh) {
+  const url = BODY_TEXTURES[id];
+  if (!url) return;
+  textureLoader.load(url, (tex) => {
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    const u = mesh.material.uniforms;
+    u.uMap.value = tex;
+    u.uHasMap.value = 1;
+    u.uGrid.value = GRID_ON_TEXTURE;
+  });
 }
 
 const craftGeometry = new THREE.SphereGeometry(1, 20, 14);
@@ -313,6 +348,7 @@ function syncObjects(state) {
         rel: new THREE.Vector3(),
       };
       scene.add(o.mesh);
+      applyBodyTexture(b.id, o.mesh);
       objects.set(b.id, o);
     }
     o.data = b;

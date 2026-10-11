@@ -216,6 +216,13 @@ offline.
   view.
 * Bodies are drawn as exact ray-traced spheres, lit by the Sun, with a lat/lon grid that adds
   finer lines as you zoom in. The prime meridian and equator are highlighted.
+* Earth is drawn with a map of its geography, sampled in the rotating body frame, so
+  continents sit under the simulated latitudes and longitudes (LC-39A is on Cape Canaveral).
+  The night side stays faintly lit for orientation. The map is `viz/textures/earth.jpg`:
+  NASA's Blue Marble Next Generation (December 2004, with topography and bathymetry), resized
+  to 4096 × 2048 (about 1.2 MB). It is public domain, courtesy of NASA Earth Observatory.
+  Other bodies keep a flat colour; the `BODY_TEXTURES` table in `viz/app.js` maps a body id
+  to an image.
 * Spacecraft are spheres sized to their reference diameter.
 * Ecliptic grid (toggle with the panel checkbox or `E`; the choice is remembered per browser):
   a polar grid in the ecliptic plane centred on the Sun. Rings at 0.1 / 1 / 10 AU appear as
