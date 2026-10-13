@@ -235,8 +235,16 @@ offline.
   The night side stays faintly lit for orientation. The map is `viz/textures/earth.jpg`:
   NASA's Blue Marble Next Generation (December 2004, with topography and bathymetry), resized
   to 4096 × 2048 (about 1.2 MB). It is public domain, courtesy of NASA Earth Observatory.
-  Other bodies keep a flat colour; the `BODY_TEXTURES` table in `viz/app.js` maps a body id
-  to an image.
+* The Moon is drawn with `viz/textures/moon.jpg`, from NASA's CGI Moon Kit: the Lunar
+  Reconnaissance Orbiter color map, 2019 version, 4096 × 2048, about 1.4 MB. It is courtesy
+  of NASA's Scientific Visualization Studio (Ernie Wright, Noah Petro).
+  * The sim's lunar coordinates match selenographic ones closely: Earth stays within about 8°
+    of longitude 0 as the Moon librates. So the near side faces Earth, and the Moon page's
+    landing sites sit on their real terrain.
+  * The viewer labels the Moon "moon", although its body id in the sim is `luna`.
+    `?focus=moon` and `?focus=luna` both work.
+* Other bodies keep a flat colour; the `BODY_TEXTURES` table in `viz/app.js` maps a body id
+  to an image, and `DISPLAY_NAMES` maps a body id to the name shown.
 * Spacecraft are drawn as simple true-size models built in `viz/models.js`: core, boosters,
   upper stage, ogive fairing (two half shells once jettisoned) and a satellite with solar
   panels, in each rocket's colours. New Glenn's first stage also has its two aft strakes

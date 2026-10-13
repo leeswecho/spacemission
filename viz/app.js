@@ -32,7 +32,11 @@ const CRAFT_COLOR = '#ff9f43';
 // Surface maps (equirectangular, longitude -180..180 left to right, north up).
 // earth.jpg: NASA Blue Marble Next Generation, December 2004, with topography and bathymetry
 // (public domain, NASA Earth Observatory), resized to 4096 x 2048.
-const BODY_TEXTURES = { earth: 'textures/earth.jpg' };
+const BODY_TEXTURES = { earth: 'textures/earth.jpg', luna: 'textures/moon.jpg' };
+// Names shown for body ids (the simulation calls the Moon 'luna'); ?focus= accepts either.
+const DISPLAY_NAMES = { luna: 'moon' };
+const ID_ALIASES = Object.fromEntries(Object.entries(DISPLAY_NAMES).map(([id, name]) => [name, id]));
+const displayName = (id) => DISPLAY_NAMES[id] ?? id;
 const GRID_ON_TEXTURE = 0.6;  // lat/lon grid strength over a surface map
 
 function colorFor(id) {
@@ -342,9 +346,9 @@ function syncTrailFrameOptions() {
   const bodies = [...objects.values()].filter((o) => o.kind === 'body').map((o) => o.id);
   const have = [...sel.options].map((o) => o.value);
   if (have.length !== bodies.length + 1 || bodies.some((b, i) => have[i + 1] !== b)) {
-    sel.replaceChildren(new Option('Auto', 'auto'), ...bodies.map((b) => new Option(b, b)));
+    sel.replaceChildren(new Option('Auto', 'auto'), ...bodies.map((b) => new Option(displayName(b), b)));
   }
-  const auto = `Auto (${autoTrailFrameId()})`;
+  const auto = `Auto (${displayName(autoTrailFrameId())})`;
   if (sel.options[0].textContent !== auto) sel.options[0].textContent = auto;
   const want = bodies.includes(trailFrameChoice) ? trailFrameChoice : 'auto';
   if (sel.value !== want) sel.value = want;
@@ -375,7 +379,7 @@ function bodyGridTarget() {
   const b = f.kind === 'body' ? f : objects.get(f.data.trail?.reference_body ?? f.data.nearest_body.id);
   if (!b || b.kind !== 'body') return null;
   const soi = b.data.sphere_of_influence;
-  return { id: b.id, rel: b.rel, radiusKm: b.radiusKm, pole: b.pole, soiKm: soi == null ? Infinity : soi / KM };
+  return { id: b.id, name: displayName(b.id), rel: b.rel, radiusKm: b.radiusKm, pole: b.pole, soiKm: soi == null ? Infinity : soi / KM };
 }
 
 function makeLabel(id, kind, color) {
@@ -386,7 +390,7 @@ function makeLabel(id, kind, color) {
   dot.style.background = color;
   const name = document.createElement('span');
   name.className = 'name';
-  name.textContent = id;
+  name.textContent = displayName(id);
   el.append(dot, name);
   el.addEventListener('click', () => setFocus(id));
   labelLayer.appendChild(el);
@@ -399,7 +403,7 @@ function makeListItem(list, id, color) {
   const sw = document.createElement('span');
   sw.className = 'swatch';
   sw.style.background = color;
-  btn.append(sw, document.createTextNode(id));
+  btn.append(sw, document.createTextNode(displayName(id)));
   btn.addEventListener('click', () => setFocus(id));
   li.appendChild(btn);
   list.appendChild(li);
@@ -563,7 +567,7 @@ function setFocus(id, distanceKm) {
     r.label.classList.toggle('focus', r.id === focusId);
     r.li.querySelector('button').classList.toggle('active', r.id === focusId);
   }
-  ui.focus.textContent = id;
+  ui.focus.textContent = displayName(id);
   updateDetails();
 }
 
@@ -648,7 +652,7 @@ function updateDetails() {
     const thrust = norm(s.thrust.force);
     rows.push(
       ['Mass', fmtSci(s.mass, 'kg')],
-      ['Nearest body', nb.id],
+      ['Nearest body', displayName(nb.id)],
       ['Altitude', fmtLen(nb.altitude)],
       ['Lat / Lon', `${nb.latitude.toFixed(4)}°, ${nb.longitude.toFixed(4)}°`],
       ['Surface speed', fmtSpeed(nb.airspeed)],
@@ -663,7 +667,7 @@ function updateDetails() {
     );
     if (nb.drag_coefficient !== null) rows.push(['Cd', nb.drag_coefficient.toFixed(3)]);
   }
-  ui.detailsTitle.textContent = `Details — ${o.id}`;
+  ui.detailsTitle.textContent = `Details — ${displayName(o.id)}`;
   ui.details.replaceChildren(...rows.flatMap(([k, v]) => {
     const dt = document.createElement('dt');
     dt.textContent = k;
@@ -720,7 +724,7 @@ function applyState(state) {
     if (firstState) {
       firstState = false;
       const params = new URLSearchParams(location.search);
-      const wanted = params.get('focus');
+      const wanted = ID_ALIASES[params.get('focus')] ?? params.get('focus');
       const dist = params.has('dist') ? Number(params.get('dist')) : undefined;
       if (wanted && objects.has(wanted)) setFocus(wanted, dist);
       else if (objects.has('sun')) setFocus('sun', dist ?? 4 * AU / KM);

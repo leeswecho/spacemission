@@ -230,7 +230,7 @@ export class BodyGrid {
     this.nodeLabel.title = 'Ascending node of the equator on the ecliptic';
     const nodeR = THREE.MathUtils.clamp(0.5 * range, 1.3 * body.radiusKm, 0.6 * fadeR);
     place(this.nodeLabel, inPlane(nodeR, 0), alpha);
-    this.poleLabel.textContent = `${body.id} N`;
+    this.poleLabel.textContent = `${body.name ?? body.id} N`;
     place(this.poleLabel, p1, alpha);
 
     // Ring labels: fine and coarse multiples, nearest first, decluttered.
