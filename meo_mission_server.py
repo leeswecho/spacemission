@@ -22,6 +22,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import meo_autopilot as ap
+from mission_log import OrderLog
 from sim_client import DEFAULT_ENDPOINT, SimClient, SimCommandError
 
 PAGE_DIR = Path(__file__).resolve().parent / "meo_mission"
@@ -68,10 +69,11 @@ def other_mission_running(url):
 class MissionControl:
     """Owns the mission status and the autopilot thread."""
 
-    def __init__(self, endpoint, timeout_ms, other_mission=None):
+    def __init__(self, endpoint, timeout_ms, other_mission=None, log_dir=None):
         self.endpoint = endpoint
         self.timeout_ms = timeout_ms
         self.other_mission = other_mission
+        self.orders = OrderLog(log_dir, "earth-orbit")
         self.status = ap.MissionStatus()
         self.thread = None
         self.start_lock = threading.Lock()
@@ -94,16 +96,26 @@ class MissionControl:
     def start(self, raw):
         params, errors, est = ap.validate(raw)
         if errors:
+            self.orders.order("launch", raw, False, errors)
             return 400, {"ok": False, "errors": errors}
         with self.start_lock:
+            refusal = None
             if self.thread and self.thread.is_alive():
-                return 409, {"ok": False, "errors": ["A mission is already in flight."]}
-            if other_mission_running(self.other_mission):
-                return 409, {"ok": False, "errors": ["The Moon mission page has a mission flying in the shared "
-                                                     "simulation; wait for it to finish."]}
+                refusal = "A mission is already in flight."
+            elif other_mission_running(self.other_mission):
+                refusal = "The Moon mission page has a mission flying in the shared simulation; wait for it to finish."
+            if refusal:
+                self.orders.order("launch", raw, False, [refusal])
+                return 409, {"ok": False, "errors": [refusal]}
+            log_path = self.orders.order("launch", raw, True, params=params, estimate=est)
             self.status.begin(params, est)
             mission = ap.MeoMission(SimClient(self.endpoint, timeout_ms=self.timeout_ms), params, self.status)
-            self.thread = threading.Thread(target=mission.run, name="meo-autopilot", daemon=True)
+
+            def fly():
+                mission.run()
+                self.orders.outcome(log_path, self.status.snapshot())
+
+            self.thread = threading.Thread(target=fly, name="meo-autopilot", daemon=True)
             self.thread.start()
         return 200, {"ok": True}
 
@@ -224,9 +236,11 @@ def main(argv=None):
                         help="URL of the 3D viewer to link to (default: same host, port 8080)")
     parser.add_argument("--other-mission", default="http://127.0.0.1:8082/api/mission",
                         help="mission status URL of the Moon page sharing the simulation ('' for none)")
+    parser.add_argument("--log-dir", default=None,
+                        help="folder for the order log: one JSON file per launch press (default: no log)")
     args = parser.parse_args(argv)
 
-    control = MissionControl(args.sim, args.timeout, args.other_mission)
+    control = MissionControl(args.sim, args.timeout, args.other_mission, args.log_dir)
     server = ThreadingHTTPServer((args.host, args.port),
                                  functools.partial(Handler, control=control, config=page_config(args.viewer_url)))
     print(f"[meo_mission] simulation at {args.sim}", flush=True)

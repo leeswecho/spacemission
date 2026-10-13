@@ -126,7 +126,8 @@ def _num(raw, key, label, errors, lo=None, hi=None, unit_text=""):
         errors.append(f"{label} must be a number.")
         return None
     if (lo is not None and x < lo) or (hi is not None and x > hi):
-        errors.append(f"{label} must be between {lo:,.6g} and {hi:,.6g}{unit_text}.")
+        nice = lambda x: f"{x:,.0f}" if x == int(x) else f"{x:,g}"
+        errors.append(f"{label} must be between {nice(lo)} and {nice(hi)}{unit_text}.")
         return None
     return x
 

@@ -504,6 +504,30 @@ Limitations:
 Options: `--sim <endpoint>`, `--host`, `--port` (8082), `--timeout` (ms), `--viewer-url`,
 `--other-mission` (default `http://127.0.0.1:8081/api/mission`).
 
+## Mission order log
+
+For teaching, both mission servers can keep a record of every launch press. Pass
+`--log-dir <folder>` and each press of a launch button writes one readable JSON file there:
+`<UTC time>_<page>-<part>.json`, e.g. `2026-10-13T06-42-01Z_moon-transfer.json`. Each file
+holds:
+
+* **When and where:** `ordered_at_utc`, `page` (`earth-orbit` or `moon`) and `part` (the
+  Moon page's tab; `launch` on the Earth-orbit page).
+* **The request:** exactly what the page sent.
+* **For an accepted launch:** the validated `settings` (rocket or engine figures included) and
+  the pre-flight `estimate`.
+* **Its outcome,** added when the mission ends: succeeded, failed or aborted, the message, the
+  result (orbit reached, payload and propellant delivered), the checklist, and the flight log.
+* **For a refused press,** `_rejected` in the file name and the `rejection_reasons` instead:
+  invalid inputs, or a mission already flying.
+
+A whole mission's file is a few KB. Nothing is cleaned up automatically. The log is never
+served over HTTP: fetch it from the server, e.g.
+`scp -i <key> 'ubuntu@<server>:/var/lib/spacemission/mission-orders/*.json' .`. On the
+deployed server the files go to `/var/lib/spacemission/mission-orders/` (systemd
+`StateDirectory`, since the services can't write to the home directory). Without
+`--log-dir`, nothing is logged.
+
 ## Notes and limitations
 
 * Step cost grows with the number of spacecraft substeps. A craft in low orbit uses ~4 s

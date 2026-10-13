@@ -27,6 +27,7 @@ import engines as eng
 import meo_autopilot as ap
 import moon_autopilot as ma
 from meo_mission_server import other_mission_running, serve_shared
+from mission_log import OrderLog
 from sim_client import DEFAULT_ENDPOINT, SimClient, SimCommandError
 
 PAGE_DIR = Path(__file__).resolve().parent / "moon_mission"
@@ -36,10 +37,11 @@ MAX_BODY = 64 * 1024
 class MissionControl:
     """Owns the mission status and the autopilot thread."""
 
-    def __init__(self, endpoint, timeout_ms, other_mission=None):
+    def __init__(self, endpoint, timeout_ms, other_mission=None, log_dir=None):
         self.endpoint = endpoint
         self.timeout_ms = timeout_ms
         self.other_mission = other_mission
+        self.orders = OrderLog(log_dir, "moon")
         self.status = ma.MoonStatus()
         self.thread = None
         self.start_lock = threading.Lock()
@@ -62,17 +64,28 @@ class MissionControl:
         part = raw.get("part")
         params, errors, est, phases = ma.validate(part, raw)
         if errors:
+            self.orders.order(part, raw, False, errors)
             return 400, {"ok": False, "errors": errors}
         with self.start_lock:
+            refusal = None
             if self.thread and self.thread.is_alive():
-                return 409, {"ok": False, "errors": ["A mission is already in flight."]}
-            if other_mission_running(self.other_mission):
-                return 409, {"ok": False, "errors": ["The Earth-orbit mission page has a mission flying in the "
-                                                     "shared simulation; wait for it to finish."]}
+                refusal = "A mission is already in flight."
+            elif other_mission_running(self.other_mission):
+                refusal = ("The Earth-orbit mission page has a mission flying in the shared simulation; "
+                           "wait for it to finish.")
+            if refusal:
+                self.orders.order(part, raw, False, [refusal])
+                return 409, {"ok": False, "errors": [refusal]}
+            log_path = self.orders.order(part, raw, True, params=params, estimate=est)
             vehicle = params["vehicle_config"]["id"] if part == "launch" else None
             self.status.begin_part(part, params, est, phases, vehicle)
             mission = ma.make_mission(SimClient(self.endpoint, timeout_ms=self.timeout_ms), params, self.status)
-            self.thread = threading.Thread(target=mission.run, name=f"moon-{part}", daemon=True)
+
+            def fly():
+                mission.run()
+                self.orders.outcome(log_path, self.status.snapshot())
+
+            self.thread = threading.Thread(target=fly, name=f"moon-{part}", daemon=True)
             self.thread.start()
         return 200, {"ok": True}
 
@@ -196,9 +209,11 @@ def main(argv=None):
                         help="URL of the 3D viewer to link to (default: same host, port 8080)")
     parser.add_argument("--other-mission", default="http://127.0.0.1:8081/api/mission",
                         help="mission status URL of the Earth-orbit page sharing the simulation ('' for none)")
+    parser.add_argument("--log-dir", default=None,
+                        help="folder for the order log: one JSON file per launch press (default: no log)")
     args = parser.parse_args(argv)
 
-    control = MissionControl(args.sim, args.timeout, args.other_mission)
+    control = MissionControl(args.sim, args.timeout, args.other_mission, args.log_dir)
     server = ThreadingHTTPServer((args.host, args.port),
                                  functools.partial(Handler, control=control, config=page_config(args.viewer_url)))
     print(f"[moon_mission] simulation at {args.sim}", flush=True)

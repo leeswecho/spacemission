@@ -590,11 +590,15 @@ class MissionServerTest(unittest.TestCase):
             return e.code, json.loads(e.read())
 
     def test_page_validate_start_abort(self):
+        import json
+        import tempfile
         import urllib.request
 
+        log_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(log_dir.cleanup)
         sim = subprocess.Popen([sys.executable, str(HERE / "nbody_sim.py"), str(SCENARIO), "--endpoint", self.SIM])
         srv = subprocess.Popen([sys.executable, str(HERE / "meo_mission_server.py"), "--sim", self.SIM,
-                                "--port", str(self.PORT)])
+                                "--port", str(self.PORT), "--other-mission", "", "--log-dir", log_dir.name])
         try:
             for _ in range(50):
                 try:
@@ -649,6 +653,28 @@ class MissionServerTest(unittest.TestCase):
             self.assertIn("add_spacecraft 'falcon9'", report)
             self.assertIn("set_thrust 'falcon9':", report)
             self.assertTrue(report.rstrip().endswith("engines off."))
+
+            # Order log: one file per launch press -- the invalid one, the accepted one (with
+            # its outcome once it ended) and the press refused while it was flying.
+            for _ in range(50):
+                files = sorted(Path(log_dir.name).glob("*.json"))
+                docs = [json.loads(f.read_text(encoding="utf-8")) for f in files]
+                accepted = [d for d in docs if d["accepted"]]
+                if accepted and accepted[0]["outcome"]:
+                    break
+                time.sleep(0.2)
+            self.assertEqual(len(files), 3, [f.name for f in files])
+            self.assertTrue(all(f.name.split("_")[1].startswith("earth-orbit-launch") for f in files))
+            rejected = [d for d in docs if not d["accepted"]]
+            self.assertEqual(len(rejected), 2)
+            self.assertTrue(any("inclination" in r for d in rejected for r in d["rejection_reasons"]))
+            self.assertTrue(any("already in flight" in r for d in rejected for r in d["rejection_reasons"]))
+            d = accepted[0]
+            self.assertEqual(d["request"]["perigee_km"], 20180)
+            self.assertEqual(d["settings"]["vehicle_config"]["id"], "falcon9")
+            self.assertIn("margin", d["estimate"])
+            self.assertEqual(d["outcome"]["state"], "aborted")
+            self.assertTrue(any(e["text"].startswith("Ignition and liftoff") for e in d["outcome"]["flight_log"]))
         finally:
             for p in (srv, sim):
                 p.kill()
