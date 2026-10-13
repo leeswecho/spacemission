@@ -115,6 +115,20 @@ VEHICLES = {
         "kick_angle": 4.0,
         "diameter": 8.4,
     },
+    "starship": {
+        "id": "starship",
+        "name": "Starship",
+        "maker": "SpaceX",
+        "summary": "Super Heavy booster with 33 Raptors, and the Starship upper stage with three "
+                   "Raptor Vacuum and three sea-level Raptors; payload rides inside Starship (no "
+                   "fairing). Both stages expended here; in development, figures are estimates.",
+        "boosters": None,
+        "core": {"dry": 200_000.0, "prop": 3_400_000.0, **_engine(74.4e6, 79.0e6, 347.0)},
+        "upper": {"dry": 100_000.0, "prop": 1_200_000.0, "thrust": 14.5e6, "mdot": 14.5e6 / (365.0 * G0)},
+        "fairing": 0.0,
+        "kick_angle": 8.0,
+        "diameter": 9.0,
+    },
 }
 
 DEFAULT_VEHICLE = "falcon9"

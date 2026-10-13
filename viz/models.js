@@ -16,6 +16,7 @@ const BLACK = 0x2a2a2a;
 const ENGINE = 0x3a3a3f;
 const FOIL = 0xc9a24a;
 const PANEL = 0x24365e;
+const STEEL = 0xb9bec4;
 
 // Per vehicle: diameter d and length l in metres.  Boosters are per booster.
 const VEHICLES = {
@@ -66,6 +67,25 @@ const VEHICLES = {
     core: { d: 8.4, l: 64.6, color: 0xc8692b },
     boosters: { d: 3.71, l: 54.0, color: WHITE, nose: 1.8 },
     upper: { d: 5.0, l: 13.7, color: WHITE, flare: 8.4 },
+    fairing: null,
+  },
+  starship: {
+    // Super Heavy: stainless steel, four grid fins near the top.
+    core: {
+      d: 9.0, l: 71.0, color: STEEL,
+      surfaces: [{ count: 4, angle: 45, thickness: 0.35, color: 0x55595e,
+        outline: [[0, 66.2], [1.9, 66.2], [1.9, 69.6], [0, 69.6]] }],
+    },
+    // Starship: ogive nose, two forward and two aft flaps; the payload rides inside.
+    upper: {
+      d: 9.0, l: 50.3, color: STEEL, nose: 13.0, payloadInside: true,
+      surfaces: [
+        { count: 2, angle: 0, thickness: 0.3, color: 0x3a3c40,
+          outline: [[0, 38.0], [1.4, 39.5], [1.4, 43.5], [0, 45.0]] },
+        { count: 2, angle: 0, thickness: 0.3, color: 0x3a3c40,
+          outline: [[0, 0.5], [2.8, 1.2], [2.8, 8.0], [0, 10.5]] },
+      ],
+    },
     fairing: null,
   },
 };
@@ -148,7 +168,10 @@ function upperStage(v, group, y0, nozzle) {
     group.add(cone(u.flare, u.d, 2.5, u.color, y));
     y += 2.5;
   }
-  group.add(cylinder(u.d, u.l - (y - y0), u.color, y));
+  const body = u.l - (y - y0) - (u.nose ?? 0);
+  group.add(cylinder(u.d, body, u.color, y));
+  if (u.nose) group.add(ogive(u.d, u.nose, 0, u.color, y + body));
+  for (const surf of u.surfaces ?? []) aeroSurfaces(surf, u.d / 2, group, y0);
   if (nozzle) group.add(cone(u.d * 0.55, u.d * 0.2, u.d * 0.6, ENGINE, y0 - u.d * 0.6));
   return y0 + u.l;
 }
@@ -314,7 +337,8 @@ export function buildCraftModel(tag) {
   const upperBase = y;
   if (parts.has('upper')) y = upperStage(v, group, y, !parts.has('core'));
   const fairingOn = parts.has('fairing') && v.fairing;
-  if (parts.has('payload') && !fairingOn) y = satellite(group, y);
+  const enclosed = v.upper?.payloadInside && parts.has('upper');
+  if (parts.has('payload') && !fairingOn && !enclosed) y = satellite(group, y);
   if (fairingOn) {
     const alone = parts.size === 1;
     const base = alone ? 0 : (v.fairing.coversUpper && parts.has('upper') ? upperBase : y);
