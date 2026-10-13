@@ -63,6 +63,24 @@ const VEHICLES = {
     upper: { d: 7.0, l: 23.4, color: WHITE },
     fairing: { d: 7.0, l: 21.9 },
   },
+  new_glenn_9x4: {
+    // Like New Glenn, scaled to 8.7 m (approximate: the vehicle is in development).
+    core: {
+      d: 8.7, l: 64.0, color: WHITE,
+      aft: [
+        { y0: 0, y1: 11.0, d0: 10.0, d1: 9.7, color: 0x5d6067 },
+        { y0: 11.0, y1: 12.6, d0: 9.7, d1: 8.7, color: 0x9a9fe0 },
+      ],
+      surfaces: [
+        { count: 2, angle: 0, thickness: 0.45, color: 0xc9cdd3,
+          outline: [[0, 5.0], [2.8, 14.6], [2.8, 21.7], [0, 29.2]] },
+        { count: 4, angle: 0, thickness: 0.9, color: 0xc9cdd3,
+          outline: [[0, 56.6], [2.2, 58.7], [2.2, 60.3], [0, 62.9]] },
+      ],
+    },
+    upper: { d: 8.7, l: 28.0, color: WHITE },
+    fairing: { d: 8.7, l: 26.0 },
+  },
   sls: {
     core: { d: 8.4, l: 64.6, color: 0xc8692b },
     boosters: { d: 3.71, l: 54.0, color: WHITE, nose: 1.8 },

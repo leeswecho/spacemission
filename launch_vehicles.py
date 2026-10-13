@@ -101,6 +101,19 @@ VEHICLES = {
         "kick_angle": 8.0,
         "diameter": 7.0,
     },
+    "new_glenn_9x4": {
+        "id": "new_glenn_9x4",
+        "name": "New Glenn 9×4",
+        "maker": "Blue Origin",
+        "summary": "Super-heavy New Glenn: 8.7 m stages, nine BE-4 engines on the first stage "
+                   "(expended here), four BE-3U on the upper stage. In development; masses are estimates.",
+        "boosters": None,
+        "core": {"dry": 180_000.0, "prop": 1_300_000.0, **_engine(22.05e6, 24.19e6, 340.0)},
+        "upper": {"dry": 28_000.0, "prop": 280_000.0, "thrust": 2.84e6, "mdot": 2.84e6 / (445.0 * G0)},
+        "fairing": 10_000.0,
+        "kick_angle": 8.0,
+        "diameter": 8.7,
+    },
     "sls": {
         "id": "sls",
         "name": "SLS Block 1",

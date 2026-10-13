@@ -259,9 +259,9 @@ python meo_mission_server.py                # -> open http://127.0.0.1:8081/
 
 A page built for one mission. It reads as a questionnaire:
 * **Rocket:** Falcon 9 Block 5, Atlas V 551, Vulcan Centaur VC4, Delta IV Heavy, New Glenn,
-  SLS Block 1 or Starship (`launch_vehicles.py`; approximate public figures; Starship's, as a
-  vehicle in development, are estimates, with both stages expended and the payload inside
-  Starship).
+  New Glenn 9×4, SLS Block 1 or Starship (`launch_vehicles.py`; approximate public figures).
+  The figures for New Glenn 9×4 and Starship are estimates, since both are in development.
+  Both of their first stages are expended here, and Starship carries its payload inside.
   * **Editable figures:** for every stage, dry mass, propellant, sea-level and vacuum thrust,
     and propellant flow. Also the number of boosters, Delta IV Heavy's core throttle while
     its side cores burn, the fairing mass and the pitch-kick angle. The page shows each
@@ -321,6 +321,7 @@ settings:
 | Delta IV Heavy | within ~0.7 km and 0.06° | ~4.3 t |
 | New Glenn | within ~0.3 km and 0.04° | ~3.2 t |
 | SLS Block 1 | within ~0.8 km and 0.08° | ~5.6 t |
+| New Glenn 9×4 | within ~1 km and 0.04° | ~11.7 t |
 | Starship | within ~1.1 km and 0.04° | ~8.0 t |
 
 Also tested with a 4,300 kg payload, all within tolerance:
@@ -330,6 +331,8 @@ Also tested with a 4,300 kg payload, all within tolerance:
   (500 × 39,800 km, 63.4°).
 * **Heavier payloads:** SLS with 60 t and New Glenn with 40 t to the ISS-like orbit, and Delta IV Heavy
   with 20 t to sun-synchronous orbit. SLS's core stage alone reaches a 200 km orbit.
+* **New Glenn 9×4:** 80 t to 200 km circular, 60 t to the ISS-like orbit and 25 t to GTO;
+  with 4.3 t, also the ISS-like orbit, 200 km circular and GTO.
 * **Starship:** 150 t to 200 km circular, 100 t to the ISS-like orbit, 50 t to sun-synchronous
   orbit, 30 t to GTO and 10 t to a Molniya orbit. With no payload (a tanker flight for the
   Moon page) it leaves about 214 t of propellant in a 200 km orbit.
