@@ -1,5 +1,7 @@
 // Moon mission page: one tab per mission part -> server-side autopilot -> live progress.
 
+import { installGlossary } from '/shared/glossary.js';
+
 const POLL_MS = 500;
 const G0 = 9.80665;
 const PARTS = ['launch', 'transfer', 'landing', 'return'];
@@ -828,6 +830,7 @@ async function poll(once = false) {
   for (const p of PARTS) restoreForm(p, saved?.[p]);
   updateSplit();
   showTab(saved?.active && PARTS.includes(saved.active) ? saved.active : 'launch');
+  installGlossary();
   for (const p of PARTS) scheduleValidate(p);
   updateViewerLink(null);
   poll();

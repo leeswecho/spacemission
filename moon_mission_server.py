@@ -26,7 +26,7 @@ from pathlib import Path
 import engines as eng
 import meo_autopilot as ap
 import moon_autopilot as ma
-from meo_mission_server import other_mission_running
+from meo_mission_server import other_mission_running, serve_shared
 from sim_client import DEFAULT_ENDPOINT, SimClient, SimCommandError
 
 PAGE_DIR = Path(__file__).resolve().parent / "moon_mission"
@@ -124,7 +124,7 @@ class Handler(SimpleHTTPRequestHandler):
             self._json(200, snap)
         elif path == "/api/mission/commands.txt":
             self._command_log()
-        else:
+        elif not serve_shared(self, path):
             super().do_GET()
 
     def _command_log(self):

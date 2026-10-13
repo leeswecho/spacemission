@@ -1,5 +1,7 @@
 // Rocket to Earth orbit mission page: questionnaire -> server-side autopilot -> live progress.
 
+import { installGlossary } from '/shared/glossary.js';
+
 const POLL_MS = 500;
 const PRESETS = {
   iss: { perigee: 420, apogee: 420, inclination: 51.6 },
@@ -562,6 +564,7 @@ async function poll(once = false) {
   vehicleKey = config.default_vehicle ?? Object.keys(vehicles())[0] ?? null;
   renderRockets();
   renderStages();
+  installGlossary();
   updateViewerLink(null);
   scheduleValidate();
   poll();

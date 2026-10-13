@@ -604,6 +604,13 @@ class MissionServerTest(unittest.TestCase):
                     time.sleep(0.1)
             with urllib.request.urlopen(f"http://127.0.0.1:{self.PORT}/", timeout=5) as res:
                 self.assertIn(b"Launch to Earth Orbit", res.read())
+            # The glossary is shared by both mission pages; nothing outside its folder is served.
+            with urllib.request.urlopen(f"http://127.0.0.1:{self.PORT}/shared/glossary.js", timeout=5) as res:
+                self.assertIn("javascript", res.headers["Content-Type"])
+                self.assertIn(b"export function installGlossary", res.read())
+            for bad in ("/shared/missing.js", "/shared/..%2Fmeo_autopilot.py", "/shared/../nbody_sim.py"):
+                with self.assertRaises(urllib.error.HTTPError, msg=bad):
+                    urllib.request.urlopen(f"http://127.0.0.1:{self.PORT}{bad}", timeout=5)
 
             good = {"perigee_km": 20180, "apogee_km": 20180, "inclination_deg": 55, "payload_kg": 4300,
                     "pace": "watch", "reset": True}

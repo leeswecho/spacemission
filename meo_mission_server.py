@@ -25,7 +25,29 @@ import meo_autopilot as ap
 from sim_client import DEFAULT_ENDPOINT, SimClient, SimCommandError
 
 PAGE_DIR = Path(__file__).resolve().parent / "meo_mission"
+# Files both mission pages use (e.g. the glossary), served at /shared/<name>.
+SHARED_DIR = Path(__file__).resolve().parent / "web_shared"
+SHARED_TYPES = {".js": "text/javascript", ".css": "text/css"}
 MAX_BODY = 64 * 1024
+
+
+def serve_shared(handler, path):
+    """Serve /shared/<name> from SHARED_DIR.  Returns False if the path isn't a shared file."""
+    if not path.startswith("/shared/"):
+        return False
+    name = path[len("/shared/"):]
+    target = (SHARED_DIR / name).resolve()
+    bad_name = "/" in name or "\\" in name
+    if bad_name or target.parent != SHARED_DIR or not target.is_file() or target.suffix not in SHARED_TYPES:
+        handler.send_error(404)
+        return True
+    body = target.read_bytes()
+    handler.send_response(200)
+    handler.send_header("Content-Type", SHARED_TYPES[target.suffix] + "; charset=utf-8")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+    return True
 
 
 def other_mission_running(url):
@@ -133,7 +155,7 @@ class Handler(SimpleHTTPRequestHandler):
             self._json(200, snap)
         elif path == "/api/mission/commands.txt":
             self._command_log()
-        else:
+        elif not serve_shared(self, path):
             super().do_GET()
 
     def _command_log(self):

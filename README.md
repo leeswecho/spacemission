@@ -400,6 +400,14 @@ The Δv estimate is rough. It is fairly close for Falcon 9, Atlas V and New Glen
 optimistic for rockets whose first stage burns long and high, so for SLS it overstates the
 payload limit.
 
+**Glossary.** On both mission pages, known acronyms and jargon are underlined with dots. Hover
+over one for a short plain-English explanation, most with a link to the Wikipedia article.
+Examples: LEO, TLI, Isp, Δv, LC-39A, BE-4, LH2, perigee.
+* **Where it lives:** `web_shared/glossary.js`, served to both pages at `/shared/glossary.js`.
+* **What gets marked:** text the page adds later too, such as the flight log, results and
+  rocket summaries.
+* **Left alone:** buttons, form fields, dropdown options and the live telemetry tiles.
+
 Options: `--sim <endpoint>`, `--host`, `--port` (8081), `--timeout` (ms), `--viewer-url`,
 `--other-mission` (the Moon page's `/api/mission`, default `http://127.0.0.1:8082/api/mission`).
 The two mission pages share one simulation, so neither launches while the other has a mission
