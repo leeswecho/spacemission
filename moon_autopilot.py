@@ -92,7 +92,8 @@ def phases_for(part, params=None):
                 ("tli", "Trans-lunar injection burn"),
                 ("cruise", "Coast to the Moon, with course corrections"),
                 ("loi", "Lunar orbit insertion burn"),
-                ("trim", "Trim to the target lunar orbit")]
+                ("trim", "Trim to the target lunar orbit"),
+                ("demo", ap.DEMO_PHASE_TITLE)]
     if part == "landing":
         return [("prep", "Place the vehicle in lunar orbit over the site"),
                 ("undock", "Lander separates"),
@@ -100,13 +101,15 @@ def phases_for(part, params=None):
                 ("descent", "Powered descent and landing"),
                 ("surface", "Surface stay: unload cargo, wait for the orbit plane"),
                 ("ascent", "Ascent to orbit"),
-                ("raise", "Raise to the starting orbit")]
+                ("raise", "Raise to the starting orbit"),
+                ("demo", ap.DEMO_PHASE_TITLE)]
     if part == "return":
         return [("prep", "Place the vehicle in lunar orbit; plan the trajectory"),
                 ("tei", "Trans-Earth injection burn"),
                 ("cruise", "Coast to Earth, with course corrections"),
                 ("capture", "Earth orbit insertion burn at perigee"),
-                ("trim", "Trim to the target Earth orbit")]
+                ("trim", "Trim to the target Earth orbit"),
+                ("demo", ap.DEMO_PHASE_TITLE)]
     raise ValueError(part)
 
 
@@ -744,6 +747,10 @@ class LunarFlight(SimFlight):
         try:
             result = self.fly()
             ok = result["success"]
+            if ok:
+                b = result["orbit"]["body"]
+                self.demo_body = b
+                self.demo_orbit(self.mu(b), self.radius(b), self.pole(b), b)
             self.status.finish("succeeded" if ok else "failed", result.pop("message"), result)
         except MissionAborted:
             self._safe_cut()
@@ -757,6 +764,10 @@ class LunarFlight(SimFlight):
             self._safe_cut()
             self.log(f"Autopilot error: {type(e).__name__}: {e}", "error")
             self.status.finish("failed", f"Autopilot error: {e}", self._partial())
+
+    def demo_report(self):
+        sc, r, v = self.craft(rel=self.demo_body)
+        self.report(sc, r, v, self.demo_body, "demonstration orbit")
 
     def _partial(self):
         try:

@@ -342,6 +342,10 @@ Flight profile:
 7. **Payload separation:** the spent stage, which keeps the rocket's ID, backs away. The result
    is then scored. Success means within max(5 km, 1 %) on both altitudes and within 0.5° on
    inclination.
+8. **One full orbit:** after a success, the payload coasts for one orbital period of its
+   final orbit, so the orbit can be seen closing in the viewer. It plays at the coasting
+   speed of the chosen pace, so ×5 makes a 12-hour GPS orbit take 2.4 hours. An abort only
+   cuts this coast short; the mission still counts as succeeded.
 
 Tested with a 4,300 kg payload to the GPS orbit (20,180 km circular, 55°), at default
 settings:
@@ -459,6 +463,8 @@ How it works:
   for a long surface wait), Fast (×50 / ×50,000) or as fast as possible.
 * **Command log:** each flight's control commands download as a text report, as on the
   Earth-orbit page.
+* **One full orbit:** as on the Earth-orbit page, each successful part ends by coasting one
+  orbital period of the final orbit (in tab 3, the lander's) to show it.
 
 Tested, all within tolerance at "as fast as possible":
 * **Transfer:** 39 t (two RL10B-2) from a 200 km parking orbit to a 100 km polar lunar orbit,

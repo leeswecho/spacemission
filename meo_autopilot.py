@@ -87,6 +87,9 @@ def alt_tolerance(target_alt):
     return max(ALT_TOLERANCE[0], ALT_TOLERANCE[1] * target_alt)
 
 
+DEMO_PHASE_TITLE = "One full orbit, to show the result"
+
+
 def phases_for(cfg):
     """Checklist phases for a vehicle configuration: [(key, title)]."""
     out = [("prep", f"Configure the {cfg['name']} and payload"),
@@ -99,7 +102,8 @@ def phases_for(cfg):
             ("transfer", "Orbit insertion and transfer burn"),
             ("coast", "Coast to apogee"),
             ("apogee_burn", "Apogee burn (raise perigee, trim inclination)"),
-            ("separation", "Payload separation")]
+            ("separation", "Payload separation"),
+            ("demo", DEMO_PHASE_TITLE)]
     return out
 
 
@@ -642,6 +646,34 @@ class SimFlight:
         except Exception:
             pass
 
+    def demo_orbit(self, mu, radius, pole, body):
+        """After a success, coast one orbital period so the final orbit can be seen.
+
+        An abort only ends the coast early; the mission still counts as succeeded.
+        """
+        self.phase("demo")
+        sc = self.sim.get_spacecraft(self.vehicle, relative_to=body)
+        r, v = np.array(sc["position"]), np.array(sc["velocity"])
+        el = elements(r, v, mu, pole)
+        if not math.isfinite(el["a"]) or el["a"] <= 0:
+            return
+        period = 2 * math.pi * math.sqrt(el["a"] ** 3 / mu)
+        self.log(f"Coasting one full orbit ({period / 3600:,.1f} h) to show the orbit.")
+        t_end = self.t + period
+        try:
+            while t_end - self.t > 0.5:
+                self.demo_report()
+                max_step = 600.0 if not self.warp[1] else max(1.0, self.warp[1] * 1.0)
+                self.step(min(t_end - self.t, max_step), powered=False)
+        except MissionAborted:
+            self.log("Demonstration orbit cut short by the operator.")
+            return
+        self.demo_report()
+        self.log("One full orbit completed.")
+
+    def demo_report(self):
+        """Telemetry during the demonstration coast (subclasses report their own way)."""
+
 
 class MeoMission(SimFlight):
     def __init__(self, client, params, status):
@@ -797,6 +829,8 @@ class MeoMission(SimFlight):
                 self._apogee_burn()
             result = self._separate_and_evaluate()
             ok = result["success"]
+            if ok:
+                self.demo_orbit(self.mu, self.radius, self.pole, "earth")
             self.status.finish("succeeded" if ok else "failed",
                                "Payload delivered to the target orbit." if ok
                                else "Payload separated, but the orbit is outside tolerance.", result)
@@ -812,6 +846,10 @@ class MeoMission(SimFlight):
             self._safe_cut()
             self.log(f"Autopilot error: {type(e).__name__}: {e}", "error")
             self.status.finish("failed", f"Autopilot error: {e}", self._partial_result())
+
+    def demo_report(self):
+        sc, r, v = self.craft()
+        self.report(sc, r, v, "demonstration orbit")
 
     def _partial_result(self):
         try:
