@@ -497,6 +497,10 @@ class LunarFlight(SimFlight):
         if self.p["reset"]:
             self.sim.reset()
             self.log("Simulation reset to its initial state.")
+            # The scenario starts with a rocket on the pad; this part of the mission doesn't use it.
+            for s in self.sim.get_state(bodies=False)["spacecraft"]:
+                self.sim.remove_spacecraft(s["id"])
+                self.log(f"Cleared '{s['id']}' from the scenario (not used by this part).")
         info = self.sim.info()
         self.t = info["time"]
         self.G = info["gravitational_constant"]

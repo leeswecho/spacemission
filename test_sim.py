@@ -713,6 +713,7 @@ class MoonAutopilotTest(unittest.TestCase):
                 d = snap["result"]["delivered"]
                 self.assertGreater(d["propellant_kg"], 0, part)
                 self.assertIn("Commands sent to the simulation", status.command_report())
+                self.assertTrue(any(e["text"].startswith("Cleared 'falcon9'") for e in snap["log"]), part)
                 if part == "landing":
                     r = snap["result"]
                     self.assertLess(r["landing"]["site_error_km"], 1.0)
