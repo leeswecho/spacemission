@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mission page: launch a rocket into a medium Earth orbit.
+"""Mission page: launch a rocket into an Earth orbit (LEO to GTO).
 
 Serves a questionnaire page (./meo_mission) where the operator picks the
 rocket (and may edit its masses, thrust and propellant flows) and the target
@@ -163,8 +163,8 @@ def page_config(viewer_url):
     return {
         "viewer_url": viewer_url,
         "launch_latitude": ap.LAUNCH_LATITUDE,
-        "meo_min_km": ap.MEO_MIN_ALT / 1e3,
-        "meo_max_km": ap.MEO_MAX_ALT / 1e3,
+        "orbit_min_km": ap.ORBIT_MIN_ALT / 1e3,
+        "orbit_max_km": ap.ORBIT_MAX_ALT / 1e3,
         "max_payload_kg": ap.MAX_PAYLOAD,
         "paces": {k: {"powered": v[0], "coast": v[1]} for k, v in ap.PACES.items()},
         "vehicles": ap.lv.catalog(),
@@ -173,7 +173,7 @@ def page_config(viewer_url):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Serve the rocket to MEO mission page.")
+    parser = argparse.ArgumentParser(description="Serve the rocket to Earth orbit mission page.")
     parser.add_argument("--sim", default=DEFAULT_ENDPOINT, help=f"simulation endpoint (default {DEFAULT_ENDPOINT})")
     parser.add_argument("--host", default="127.0.0.1", help="HTTP bind address (default 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8081, help="HTTP port (default 8081)")

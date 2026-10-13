@@ -389,7 +389,11 @@ class MeoAutopilotTest(unittest.TestCase):
             params, errors, est = ap.validate({**ok, "vehicle": key})
             self.assertEqual(errors, [], key)
             self.assertGreater(est["liftoff_tw"], 1.05, key)
-        for bad in ({"perigee_km": 500}, {"apogee_km": 40000}, {"perigee_km": 25000},
+        for low in ({"perigee_km": 200, "apogee_km": 200, "inclination_deg": 28.7},      # parking orbit
+                    {"perigee_km": 200, "apogee_km": 35786, "inclination_deg": 28.7},    # GTO
+                    {"perigee_km": 500, "apogee_km": 39800, "inclination_deg": 63.4}):   # Molniya
+            self.assertEqual(ap.validate({**ok, **low})[1], [], low)
+        for bad in ({"perigee_km": 150}, {"apogee_km": 45000}, {"perigee_km": 25000},
                     {"inclination_deg": 20}, {"payload_kg": -1}, {"payload_kg": "lots"}, {"pace": "warp"},
                     {"vehicle": "saturn_v"},
                     {"vehicle_config": {"core": {"thrust_sl": 9e6}}},             # sea level > vacuum
@@ -473,14 +477,14 @@ class MeoAutopilotTest(unittest.TestCase):
         self.assertLessEqual(max(sim.steps), 20.0 * ap.PACE_CHUNK + 1e-9)  # long steps were chunked
         self.assertAlmostEqual(sim.t, 30.5)
 
-    def fly(self, endpoint, vehicle, ids, **extra):
+    def fly(self, endpoint, vehicle, ids, orbit=(20180, 20180, 55), **extra):
         import meo_autopilot as ap
         from sim_client import SimClient
 
         sim = subprocess.Popen([sys.executable, str(HERE / "nbody_sim.py"), str(SCENARIO), "--endpoint", endpoint])
         try:
-            params, errors, est = ap.validate({"vehicle": vehicle, "perigee_km": 20180, "apogee_km": 20180,
-                                               "inclination_deg": 55, "payload_kg": 4300, "pace": "max",
+            params, errors, est = ap.validate({"vehicle": vehicle, "perigee_km": orbit[0], "apogee_km": orbit[1],
+                                               "inclination_deg": orbit[2], "payload_kg": 4300, "pace": "max",
                                                "reset": True, **extra})
             self.assertEqual(errors, [])
             status = ap.MissionStatus()
@@ -500,8 +504,8 @@ class MeoAutopilotTest(unittest.TestCase):
             self.assertEqual(parts[f"{vehicle}_s1"], ["core"])
             self.assertEqual(parts["fairing"], ["fairing"])
             client.close()
-            self.assertLess(abs(r["errors"]["perigee_km"]), 50)
-            self.assertLess(abs(r["errors"]["apogee_km"]), 50)
+            self.assertLess(abs(r["errors"]["perigee_km"]), ap.alt_tolerance(orbit[0] * 1e3) / 1e3)
+            self.assertLess(abs(r["errors"]["apogee_km"]), ap.alt_tolerance(orbit[1] * 1e3) / 1e3)
             self.assertLess(abs(r["errors"]["inclination_deg"]), 0.5)
             return snap
         finally:
@@ -510,6 +514,13 @@ class MeoAutopilotTest(unittest.TestCase):
 
     def test_gps_mission(self):
         self.fly("tcp://127.0.0.1:5596", "falcon9", ["fairing", "falcon9", "falcon9_s1", "payload"])
+
+    def test_leo_and_gto_missions(self):
+        ids = ["fairing", "falcon9", "falcon9_s1", "payload"]
+        self.fly("tcp://127.0.0.1:5596", "falcon9", ids, orbit=(420, 420, 51.6))      # ISS-like
+        snap = self.fly("tcp://127.0.0.1:5596", "falcon9", ids, orbit=(200, 200, 28.7))  # parking orbit
+        self.assertTrue(any(e["text"].startswith("Already in the target orbit") for e in snap["log"]))
+        self.fly("tcp://127.0.0.1:5596", "falcon9", ids, orbit=(200, 35786, 28.7))    # GTO
 
     def test_gps_mission_with_boosters(self):
         # Vulcan replaces the scenario's Falcon 9 on the pad; boosters, first stage and
@@ -552,7 +563,7 @@ class MissionServerTest(unittest.TestCase):
                 except OSError:
                     time.sleep(0.1)
             with urllib.request.urlopen(f"http://127.0.0.1:{self.PORT}/", timeout=5) as res:
-                self.assertIn(b"Medium Earth Orbit", res.read())
+                self.assertIn(b"Launch to Earth Orbit", res.read())
 
             good = {"perigee_km": 20180, "apogee_km": 20180, "inclination_deg": 55, "payload_kg": 4300,
                     "pace": "watch", "reset": True}

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Rocket to MEO</title>
+  <title>Rocket to Orbit</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="style.css">
 </head>
@@ -11,7 +11,7 @@
   <header class="topbar">
     <div>
       <p class="eyebrow">Mission</p>
-      <h1>Launch to Medium Earth Orbit</h1>
+      <h1>Launch to Earth Orbit</h1>
     </div>
     <div class="topbar-right">
       <span id="sim-status" class="pill pill-wait">Connecting…</span>
@@ -41,10 +41,16 @@
         </fieldset>
 
         <div class="presets orbit-presets">
-          <span class="muted">Start from a real constellation:</span>
-          <button type="button" data-preset="gps">GPS</button>
-          <button type="button" data-preset="galileo">Galileo</button>
-          <button type="button" data-preset="glonass">GLONASS</button>
+          <span class="muted">Start from a real orbit:</span>
+          <button type="button" data-preset="iss" title="About 420 km circular, 51.6°">ISS</button>
+          <button type="button" data-preset="starlink" title="550 km circular, 53°">Starlink</button>
+          <button type="button" data-preset="polar" title="800 km circular, 90°">Polar</button>
+          <button type="button" data-preset="sso" title="Sun-synchronous: 700 km circular, 98.2°">Sun-synchronous</button>
+          <button type="button" data-preset="gps" title="20,180 km circular, 55°">GPS</button>
+          <button type="button" data-preset="galileo" title="23,222 km circular, 56°">Galileo</button>
+          <button type="button" data-preset="glonass" title="19,100 km circular, 64.8°">GLONASS</button>
+          <button type="button" data-preset="gto" title="Geostationary transfer orbit: 200 × 35,786 km, 28.7°">GTO</button>
+          <button type="button" data-preset="molniya" title="500 × 39,800 km, 63.4°">Molniya</button>
         </div>
 
         <fieldset>
@@ -53,7 +59,7 @@
             <input id="perigee" name="perigee_km" type="number" inputmode="decimal" step="any" value="20180" required>
             <span class="unit">km above the surface</span>
           </div>
-          <p class="help">MEO lies between <span id="meo-range"></span>.</p>
+          <p class="help">Any altitude between <span id="orbit-range"></span>.</p>
         </fieldset>
 
         <fieldset>

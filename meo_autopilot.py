@@ -1,4 +1,4 @@
-"""Autopilot for the "rocket to MEO" mission.
+"""Autopilot for the "rocket to Earth orbit" mission.
 
 Launches a vehicle from launch_vehicles.py (Falcon 9, Atlas V 551, Vulcan,
 Delta IV Heavy, New Glenn, SLS, with any edited masses, thrusts and flows)
@@ -50,8 +50,8 @@ LAUNCH_LATITUDE = 28.60822   # LC-39A, as in solar_system.yaml
 LAUNCH_LONGITUDE = -80.60409
 PARKING_ALT = 200e3          # m
 FAIRING_ALT = 110e3          # m
-MEO_MIN_ALT = 2_000e3        # m (top of LEO)
-MEO_MAX_ALT = 35_786e3       # m (geostationary altitude)
+ORBIT_MIN_ALT = PARKING_ALT  # m, nothing below the parking orbit
+ORBIT_MAX_ALT = 40_000e3     # m, room for GTO and Molniya apogees
 MAX_PAYLOAD = 150_000.0      # kg
 G_LIMIT = 4.0 * G0           # liquid stages throttle to stay under 4 g
 TICK = 0.5                   # s, guidance update interval in powered flight
@@ -75,11 +75,16 @@ PACES = {
 }
 
 # Success tolerances.
-ALT_TOLERANCE = (50e3, 0.01)  # max(50 km, 1 %)
+ALT_TOLERANCE = (5e3, 0.01)   # max(5 km, 1 %)
 INC_TOLERANCE = 0.5           # deg
 
 EARTH_MU = 398600.435507e9
 EARTH_RADIUS = 6.378137e6
+
+
+def alt_tolerance(target_alt):
+    """Allowed altitude error (m) for a target altitude (m)."""
+    return max(ALT_TOLERANCE[0], ALT_TOLERANCE[1] * target_alt)
 
 
 def phases_for(cfg):
@@ -206,10 +211,10 @@ def validate(raw):
     pace = raw.get("pace", "watch")
     if pace not in PACES:
         errors.append("Unknown pacing option.")
-    lo, hi = MEO_MIN_ALT / 1e3, MEO_MAX_ALT / 1e3
+    lo, hi = ORBIT_MIN_ALT / 1e3, ORBIT_MAX_ALT / 1e3
     for value, label in ((perigee, "Perigee"), (apogee, "Apogee")):
         if value is not None and not lo <= value <= hi:
-            errors.append(f"{label} altitude must be between {lo:,.0f} and {hi:,.0f} km (MEO).")
+            errors.append(f"{label} altitude must be between {lo:,.0f} and {hi:,.0f} km.")
     if perigee is not None and apogee is not None and perigee > apogee:
         errors.append("Perigee altitude cannot be higher than apogee altitude.")
     min_inc = math.ceil(LAUNCH_LATITUDE * 10) / 10
@@ -769,9 +774,9 @@ class MeoMission:
             if self.core_depleted:
                 self._stage_core()
             self._closed_loop_ascent()
-            self._transfer_burn()
-            self._coast_to_apogee()
-            self._apogee_burn()
+            if self._transfer_burn():
+                self._coast_to_apogee()
+                self._apogee_burn()
             result = self._separate_and_evaluate()
             ok = result["success"]
             self.status.finish("succeeded" if ok else "failed",
@@ -1194,12 +1199,22 @@ class MeoMission:
             speed = math.sqrt(self.mu * 2 * r_a_t / (rn * (rn + r_a_t)))
             return speed * self._horizontal_in_plane(r)
 
-        el = self._burn_to(desired, lambda el, vg: vg < 0.5 or el["r_a"] >= r_a_t, "transfer burn")
+        # Stop early only once the orbit is safe as well: for a target apogee at the parking
+        # altitude, the apogee is reached long before the perigee is out of the atmosphere.
+        r_p_min = self.radius + PARKING_ALT - 2e3
+        el = self._burn_to(desired, lambda el, vg: vg < 0.5 or (el["r_a"] >= r_a_t and el["r_p"] >= r_p_min),
+                           "transfer burn")
         self.log(f"Transfer orbit {(el['r_p'] - self.radius) / 1e3:,.0f} × "
                  f"{(el['r_a'] - self.radius) / 1e3:,.0f} km, inclination {el['inc']:.2f}°.")
         if self.stage != "upper":
             # The first stage did the whole transfer burn: drop it before the coast.
             self._stage_core()
+        # A target perigee at the parking altitude: the transfer orbit is already the target.
+        if (abs(el["r_p"] - self.r_p_target) <= 0.25 * alt_tolerance(self.r_p_target - self.radius)
+                and abs(el["inc"] - self.inc_target) <= 0.1 * INC_TOLERANCE):
+            self.log("Already in the target orbit; no apogee burn needed.")
+            return False
+        return True
 
     # 8. Coast
     def _coast_to_apogee(self):
@@ -1256,7 +1271,7 @@ class MeoMission:
         sc, r, v = self.craft()
         el = self.report(sc, r, v, "payload in orbit")
         result = self._orbit_summary(PAYLOAD_ID, el)
-        tol_alt = lambda target_km: max(ALT_TOLERANCE[0], ALT_TOLERANCE[1] * target_km * 1e3) / 1e3
+        tol_alt = lambda target_km: alt_tolerance(target_km * 1e3) / 1e3
         errs = {
             "perigee_km": result["perigee_km"] - self.p["perigee_km"],
             "apogee_km": (result["apogee_km"] or math.inf) - self.p["apogee_km"],

@@ -12,7 +12,7 @@ advances only when a client sends `step`.
 | `tools/generate_solar_system.py` | Regenerates `solar_system.yaml` (J2000 ephemeris) |
 | `test_sim.py` | Tests (`python -m unittest test_sim -v`) |
 | `viz_server.py`, `viz/` | Web 3D viewer of the live state (see below) |
-| `meo_mission_server.py`, `meo_autopilot.py`, `launch_vehicles.py`, `meo_mission/` | Mission page: launch a chosen rocket to a medium Earth orbit (see below) |
+| `meo_mission_server.py`, `meo_autopilot.py`, `launch_vehicles.py`, `meo_mission/` | Mission page: launch a chosen rocket to an Earth orbit, LEO to GTO (see below) |
 
 Requirements: Python 3.9+, `numpy`, `pyyaml`, `pyzmq`.
 
@@ -250,7 +250,7 @@ offline.
 * URL parameters: `?focus=<id>` sets the initial focus. `&dist=<km>` sets the initial camera
   distance from that object's centre.
 
-## Mission page: rocket to medium Earth orbit
+## Mission page: rocket to Earth orbit
 
 ```
 python meo_mission_server.py                # -> open http://127.0.0.1:8081/
@@ -263,8 +263,10 @@ A page built for one mission. It reads as a questionnaire:
     and propellant flow. Also the number of boosters, Delta IV Heavy's core throttle while
     its side cores burn, the fairing mass and the pitch-kick angle. The page shows each
     stage's Isp and burn time, and picking a rocket restores its defaults.
-* **Orbit:** perigee and apogee altitude, which must lie within MEO (2,000–35,786 km), and
-  the inclination. There are presets for GPS, Galileo and GLONASS.
+* **Orbit:** perigee and apogee altitude, anywhere from the 200 km parking orbit up to
+  40,000 km, and the inclination (28.7°–151.3° from the Cape, since there are no plane
+  changes). There are presets for the ISS, Starlink, a polar orbit, a sun-synchronous orbit,
+  GPS, Galileo, GLONASS, a geostationary transfer orbit (GTO) and a Molniya orbit.
 * **Payload mass, playback speed,** and whether to reset the shared simulation first.
 
 As you type, the page validates the answers. It also shows a rough feasibility estimate: liftoff mass and thrust-to-weight, the ideal Δv of each stage against the Δv needed (with about 1.7 km/s of ascent losses assumed), the margin, and the largest payload this orbit allows.
@@ -299,9 +301,10 @@ Flight profile:
 5. **Transfer burn:** the ascent flows straight into a transfer orbit whose apogee is the target
    apogee. A first stage that is still attached is dropped afterwards.
 6. **Apogee:** the upper stage coasts to apogee, then burns to raise the perigee and trim the
-   inclination.
+   inclination. When the target perigee is the parking altitude (200 km circular, or GTO),
+   the transfer orbit already is the target orbit and this step is skipped.
 7. **Payload separation:** the spent stage, which keeps the rocket's ID, backs away. The result
-   is then scored. Success means within max(50 km, 1 %) on both altitudes and within 0.5° on
+   is then scored. Success means within max(5 km, 1 %) on both altitudes and within 0.5° on
    inclination.
 
 Tested with a 4,300 kg payload to the GPS orbit (20,180 km circular, 55°), at default
@@ -316,7 +319,19 @@ settings:
 | New Glenn | within ~0.3 km and 0.04° | ~3.2 t |
 | SLS Block 1 | within ~0.8 km and 0.08° | ~5.6 t |
 
-Also tested:
+Also tested with a 4,300 kg payload, all within tolerance:
+* **All six rockets:** an ISS-like orbit (420 km circular, 51.6°), 200 km circular at 28.7°
+  and GTO (200 × 35,786 km at 28.7°).
+* **Falcon 9:** also 200 × 1,000 km at 45°, sun-synchronous (700 km, 98.2°) and Molniya
+  (500 × 39,800 km, 63.4°).
+* **Heavier payloads:** SLS with 60 t and New Glenn with 40 t to the ISS-like orbit, and Delta IV Heavy
+  with 20 t to sun-synchronous orbit. SLS's core stage alone reaches a 200 km orbit.
+
+Orientation is not controlled: the argument of perigee (where the apogee lies, which matters for
+Molniya orbits) and the orbit's node follow from the launch time. Equatorial orbits and GEO
+would need plane changes, which the autopilot does not do; GTO is as far as it goes.
+
+Other tests:
 * **Successful edits:**
   * Vulcan with six boosters and 10 t of payload.
   * Atlas V with no boosters (an "Atlas V 401") and 2 t.

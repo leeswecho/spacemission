@@ -1,7 +1,13 @@
-// Rocket to MEO mission page: questionnaire -> server-side autopilot -> live progress.
+// Rocket to Earth orbit mission page: questionnaire -> server-side autopilot -> live progress.
 
 const POLL_MS = 500;
 const PRESETS = {
+  iss: { perigee: 420, apogee: 420, inclination: 51.6 },
+  starlink: { perigee: 550, apogee: 550, inclination: 53 },
+  polar: { perigee: 800, apogee: 800, inclination: 90 },
+  sso: { perigee: 700, apogee: 700, inclination: 98.2 },
+  gto: { perigee: 200, apogee: 35786, inclination: 28.7 },
+  molniya: { perigee: 500, apogee: 39800, inclination: 63.4 },
   gps: { perigee: 20180, apogee: 20180, inclination: 55 },
   galileo: { perigee: 23222, apogee: 23222, inclination: 56 },
   glonass: { perigee: 19100, apogee: 19100, inclination: 64.8 },
@@ -33,7 +39,7 @@ const ui = {
   simStatus: $('sim-status'), viewerLink: $('viewer-link'),
   form: $('form'), perigee: $('perigee'), apogee: $('apogee'), inclination: $('inclination'), payload: $('payload'),
   reset: $('reset'), launch: $('launch'), feasibility: $('feasibility'), errors: $('errors'),
-  meoRange: $('meo-range'), incHelp: $('inc-help'),
+  orbitRange: $('orbit-range'), incHelp: $('inc-help'),
   rockets: $('rockets'), stages: $('stages'), vehicleDetails: $('vehicle-details'),
   vehicleEdited: $('vehicle-edited'), vehicleReset: $('vehicle-reset'),
   state: $('mission-state'), result: $('result'), phases: $('phases'), telemetry: $('telemetry'),
@@ -545,13 +551,14 @@ async function poll(once = false) {
     config = {};
   }
   viewerBase = config.viewer_url || `${location.protocol}//${location.hostname}:8080/`;
-  const min = config.meo_min_km ?? 2000;
-  const max = config.meo_max_km ?? 35786;
-  ui.meoRange.textContent = `${fmt(min)} km and ${fmt(max)} km (geostationary altitude). GPS satellites fly at 20,180 km`;
+  const min = config.orbit_min_km ?? 200;
+  const max = config.orbit_max_km ?? 40000;
+  ui.orbitRange.textContent = `${fmt(min)} km (the parking orbit) and ${fmt(max)} km. `
+    + 'For reference: the ISS flies at about 420 km, GPS at 20,180 km, geostationary satellites at 35,786 km';
   const lat = config.launch_latitude ?? 28.6;
   const minInc = Math.ceil(lat * 10) / 10;
   ui.incHelp.textContent = `Launching from Cape Canaveral (${lat.toFixed(1)}° N), the inclination must be between `
-    + `${minInc}° and ${(180 - minInc).toFixed(1)}°. GPS uses 55°, Galileo 56°, GLONASS 64.8°.`;
+    + `${minInc}° and ${(180 - minInc).toFixed(1)}°. The ISS uses 51.6°, GPS 55°, polar orbits 90° and sun-synchronous ones about 98°.`;
   vehicleKey = config.default_vehicle ?? Object.keys(vehicles())[0] ?? null;
   renderRockets();
   renderStages();
