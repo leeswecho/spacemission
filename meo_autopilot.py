@@ -404,6 +404,7 @@ class MissionStatus:
     def __init__(self):
         self.lock = threading.Lock()
         self.abort_requested = False
+        self.paused = False
         self.state = "idle"
         self.params = None
         self.estimate = None
@@ -420,6 +421,7 @@ class MissionStatus:
         cfg = params["vehicle_config"]
         with self.lock:
             self.abort_requested = False
+            self.paused = False
             self.state = "running"
             self.params = params
             self.estimate = est
@@ -459,6 +461,7 @@ class MissionStatus:
 
     def finish(self, state, message, result=None):
         with self.lock:
+            self.paused = False
             self.state = state
             self.message = message
             self.result = result
@@ -472,6 +475,14 @@ class MissionStatus:
         with self.lock:
             if self.state == "running":
                 self.abort_requested = True
+                return True
+            return False
+
+    def set_paused(self, paused):
+        """Pause or resume a running mission (simulated time stops while paused)."""
+        with self.lock:
+            if self.state == "running":
+                self.paused = bool(paused)
                 return True
             return False
 
@@ -542,6 +553,7 @@ class MissionStatus:
                 "message": self.message,
                 "vehicle": self.vehicle,
                 "abort_requested": self.abort_requested,
+                "paused": self.paused,
             }
 
 
@@ -611,6 +623,7 @@ class SimFlight:
         reply = None
         while remaining > 1e-9:
             self.check_abort()
+            self.wait_while_paused()
             d = min(chunk, remaining)
             reply = self.sim.step(d)
             remaining -= d
@@ -619,6 +632,18 @@ class SimFlight:
             if warp:
                 self._pace(warp, d)
         return reply
+
+    def wait_while_paused(self):
+        """Hold here while the operator has paused the mission; nothing is stepped, so
+        simulated time stands still.  An abort still ends the mission."""
+        if not self.status.paused:
+            return
+        self.log("Paused by the operator.")
+        while self.status.paused:
+            self.check_abort()
+            time.sleep(0.2)
+        self._pace_anchor = None  # don't try to catch up on the time spent paused
+        self.log("Resumed.")
 
     def _pace(self, warp, d):
         now = time.monotonic()

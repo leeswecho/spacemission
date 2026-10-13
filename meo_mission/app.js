@@ -45,7 +45,7 @@ const ui = {
   rockets: $('rockets'), stages: $('stages'), vehicleDetails: $('vehicle-details'),
   vehicleEdited: $('vehicle-edited'), vehicleReset: $('vehicle-reset'),
   state: $('mission-state'), result: $('result'), phases: $('phases'), telemetry: $('telemetry'),
-  telVehicle: $('tel-vehicle'), abort: $('abort'), log: $('log'),
+  telVehicle: $('tel-vehicle'), abort: $('abort'), pause: $('pause'), log: $('log'),
 };
 
 let config = null;
@@ -366,6 +366,16 @@ ui.form.addEventListener('submit', async (e) => {
   poll(true);
 });
 
+let paused = false;
+ui.pause.addEventListener('click', async () => {
+  ui.pause.disabled = true;
+  try {
+    await postJSON('/api/pause', { paused: !paused });
+  } finally {
+    poll(true);
+  }
+});
+
 ui.abort.addEventListener('click', async () => {
   if (!confirm('Abort the mission? Engines will be shut down immediately.')) return;
   await postJSON('/api/abort');
@@ -529,7 +539,12 @@ async function poll(once = false) {
 
     running = snap.state === 'running';
     const [label, kind] = STATE_LABELS[snap.state] ?? [snap.state, 'idle'];
-    setPill(ui.state, snap.abort_requested && running ? 'Aborting…' : label, kind);
+    paused = running && Boolean(snap.paused);
+    if (snap.abort_requested && running) setPill(ui.state, 'Aborting…', kind);
+    else if (paused) setPill(ui.state, 'Paused', 'wait');
+    else setPill(ui.state, label, kind);
+    ui.pause.disabled = !running || Boolean(snap.abort_requested);
+    ui.pause.textContent = paused ? 'Resume' : 'Pause';
     for (const fs of ui.form.querySelectorAll('fieldset, .presets button')) fs.disabled = running;
     ui.abort.disabled = !running;
     updateLaunchButton();

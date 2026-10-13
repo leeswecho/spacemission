@@ -170,6 +170,8 @@ class Handler(SimpleHTTPRequestHandler):
             self._json(status, reply)
         elif path == "/api/abort":
             self._json(200, {"ok": self.control.abort()})
+        elif path == "/api/pause":  # {"paused": true} pauses, {"paused": false} resumes
+            self._json(200, {"ok": self.control.status.set_paused(body.get("paused", True))})
         else:
             self._json(404, {"ok": False, "errors": ["Not found."]})
 

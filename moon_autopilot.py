@@ -373,6 +373,7 @@ class MoonStatus(ap.MissionStatus):
     def begin_part(self, part, params, est, phases, vehicle):
         with self.lock:
             self.abort_requested = False
+            self.paused = False
             self.state = "running"
             self.part = part
             self.params = params

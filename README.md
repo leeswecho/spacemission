@@ -322,8 +322,13 @@ As you type, the page validates the answers. It also shows a rough feasibility e
 **Launch** starts the autopilot (`meo_autopilot.py`) inside the mission server. It flies the
 mission with ordinary sim commands, so it keeps flying if the page is closed, and every open
 page sees the same flight. Only one mission runs at a time. The page shows the phase checklist,
-live telemetry, the flight log, and finally target against achieved orbit. **Abort** shuts the
-engines down immediately. Once a mission has ended (succeeded, failed or aborted), **Download command log**
+live telemetry, the flight log, and finally target against achieved orbit.
+* **Pause / Resume** (`POST /api/pause` with `{"paused": true|false}`) stops the autopilot
+  stepping the simulation, so simulated time stands still, engines included, until you resume.
+  Both events go into the flight log. The Moon page has the same button.
+* **Abort** shuts the engines down immediately, paused or not.
+
+Once a mission has ended (succeeded, failed or aborted), **Download command log**
 (`GET /api/mission/commands.txt`) saves a plain-text report. It covers the setup, the outcome,
 the flight log, and every control command the autopilot sent to the simulation, with its
 mission and simulation time and a plain-English description: reset, craft added or removed,

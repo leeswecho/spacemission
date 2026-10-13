@@ -45,7 +45,7 @@ const $ = (id) => document.getElementById(id);
 const ui = {
   simStatus: $('sim-status'), viewerLink: $('viewer-link'),
   state: $('mission-state'), flightPart: $('flight-part'), result: $('result'), phases: $('phases'),
-  telemetry: $('telemetry'), telVehicle: $('tel-vehicle'), abort: $('abort'), log: $('log'),
+  telemetry: $('telemetry'), telVehicle: $('tel-vehicle'), abort: $('abort'), pause: $('pause'), log: $('log'),
 };
 const forms = Object.fromEntries(PARTS.map((p) => [p, document.querySelector(`form[data-part="${p}"]`)]));
 const role = (form, name) => form.querySelector(`[data-role="${name}"]`);
@@ -570,6 +570,16 @@ for (const part of PARTS) {
   });
 }
 
+let paused = false;
+ui.pause.addEventListener('click', async () => {
+  ui.pause.disabled = true;
+  try {
+    await postJSON('/api/pause', { paused: !paused });
+  } finally {
+    poll(true);
+  }
+});
+
 ui.abort.addEventListener('click', async () => {
   if (!confirm('Abort the mission? Engines will be shut down immediately.')) return;
   await postJSON('/api/abort');
@@ -785,7 +795,12 @@ async function poll(once = false) {
     else setPill(ui.simStatus, 'Simulation unreachable', 'bad');
     running = snap.state === 'running';
     const [label, kind] = STATE_LABELS[snap.state] ?? [snap.state, 'idle'];
-    setPill(ui.state, snap.abort_requested && running ? 'Aborting…' : label, kind);
+    paused = running && Boolean(snap.paused);
+    if (snap.abort_requested && running) setPill(ui.state, 'Aborting…', kind);
+    else if (paused) setPill(ui.state, 'Paused', 'wait');
+    else setPill(ui.state, label, kind);
+    ui.pause.disabled = !running || Boolean(snap.abort_requested);
+    ui.pause.textContent = paused ? 'Resume' : 'Pause';
     ui.flightPart.textContent = snap.part ? `· ${config.parts?.[snap.part] ?? snap.part}` : '';
     for (const fs of document.querySelectorAll('.part-form fieldset, .presets button')) fs.disabled = running;
     ui.abort.disabled = !running;

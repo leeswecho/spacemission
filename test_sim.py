@@ -638,6 +638,26 @@ class MissionServerTest(unittest.TestCase):
             status, snap = self.request("/api/mission")
             self.assertEqual(snap["state"], "running")
             self.assertTrue(snap["sim"]["connected"])
+
+            # Pause: simulated time stands still until resumed.
+            status, reply = self.request("/api/pause", {"paused": True})
+            self.assertTrue(reply["ok"])
+            time.sleep(1.0)
+            status, before = self.request("/api/mission")
+            time.sleep(1.5)
+            status, after = self.request("/api/mission")
+            self.assertTrue(after["paused"])
+            self.assertEqual(after["state"], "running")
+            self.assertEqual(before["telemetry"]["t"], after["telemetry"]["t"])
+            self.assertTrue(any(e["text"] == "Paused by the operator." for e in after["log"]))
+            status, reply = self.request("/api/pause", {"paused": False})
+            self.assertTrue(reply["ok"])
+            time.sleep(1.5)
+            status, resumed = self.request("/api/mission")
+            self.assertFalse(resumed["paused"])
+            self.assertGreater(resumed["telemetry"]["t"], after["telemetry"]["t"])
+            # ...and an abort still works while paused.
+            self.request("/api/pause", {"paused": True})
             status, reply = self.request("/api/abort", {})
             self.assertTrue(reply["ok"])
             for _ in range(50):
