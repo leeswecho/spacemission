@@ -281,6 +281,7 @@ const ui = {
   eclipticToggle: document.getElementById('toggle-ecliptic'),
   bodyGridToggle: document.getElementById('toggle-body-grid'),
   trailsToggle: document.getElementById('toggle-trails'),
+  trailFrame: document.getElementById('trail-frame'),
 };
 
 // Overlays; each on/off choice is remembered per browser.
@@ -312,6 +313,48 @@ function bindToggle(overlay, checkbox, prefKey) {
 const setEclipticEnabled = bindToggle(ecliptic, ui.eclipticToggle, 'viz.ecliptic');
 const setBodyGridEnabled = bindToggle(bodyGrid, ui.bodyGridToggle, 'viz.bodyGrid');
 const setTrailsEnabled = bindToggle(trails, ui.trailsToggle, 'viz.trails');
+
+// Trails are drawn whole in one frame: a chosen body, or (auto) the focused body /
+// a focused craft's sphere-of-influence body, the same body the body grid shows.
+let trailFrameChoice = 'auto';
+try {
+  trailFrameChoice = localStorage.getItem('viz.trailFrame') ?? 'auto';
+} catch {
+  // storage unavailable: start with auto
+}
+
+function autoTrailFrameId() {
+  return bodyGridTarget()?.id ?? 'sun';
+}
+
+function trailFrameId() {
+  if (trailFrameChoice !== 'auto' && objects.get(trailFrameChoice)?.kind === 'body') return trailFrameChoice;
+  return autoTrailFrameId();
+}
+
+// Menu: "Auto (<body it resolves to now>)" followed by every body.
+function syncTrailFrameOptions() {
+  const sel = ui.trailFrame;
+  const bodies = [...objects.values()].filter((o) => o.kind === 'body').map((o) => o.id);
+  const have = [...sel.options].map((o) => o.value);
+  if (have.length !== bodies.length + 1 || bodies.some((b, i) => have[i + 1] !== b)) {
+    sel.replaceChildren(new Option('Auto', 'auto'), ...bodies.map((b) => new Option(b, b)));
+  }
+  const auto = `Auto (${autoTrailFrameId()})`;
+  if (sel.options[0].textContent !== auto) sel.options[0].textContent = auto;
+  const want = bodies.includes(trailFrameChoice) ? trailFrameChoice : 'auto';
+  if (sel.value !== want) sel.value = want;
+}
+
+ui.trailFrame.addEventListener('change', () => {
+  trailFrameChoice = ui.trailFrame.value;
+  try {
+    localStorage.setItem('viz.trailFrame', trailFrameChoice);
+  } catch {
+    // just don't remember
+  }
+  updateRelativePositions();
+});
 
 // Ecliptic grid centre: the Sun, or the barycentre if there is no 'sun' body.
 function eclipticCentreRel() {
@@ -460,7 +503,8 @@ function updateRelativePositions() {
   }
   const sun = objects.get('sun');
   if (sun) sunLight.position.copy(sun.rel);
-  trails.rebuild(objects, f.abs);
+  syncTrailFrameOptions();
+  trails.rebuild(objects, f.abs, trailFrameId());
 }
 
 // ---------------------------------------------------------------------------
@@ -637,8 +681,9 @@ function setStatus(kind, text) {
 async function fetchTrails() {
   try {
     const since = encodeURIComponent(JSON.stringify(trails.since()));
-    const res = await fetch(`/api/trails?since=${since}`, { cache: 'no-store' });
-    return (await res.json()).trails;
+    const bodies = encodeURIComponent(JSON.stringify(trails.bodiesSince()));
+    const res = await fetch(`/api/trails?since=${since}&bodies=${bodies}`, { cache: 'no-store' });
+    return await res.json();
   } catch {
     return null;  // keep the trails we have
   }
@@ -649,7 +694,7 @@ async function poll() {
   try {
     const [res, trailUpdate] = await Promise.all([fetch('/api/state', { cache: 'no-store' }), fetchTrails()]);
     const doc = await res.json();
-    if (trailUpdate) trails.merge(trailUpdate);
+    if (trailUpdate) trails.merge(trailUpdate.trails, trailUpdate.bodies);
     if (doc.state) applyState(doc.state);  // re-anchors trails to current body positions
     if (doc.connected) setStatus('ok', 'Live');
     else setStatus(doc.state ? 'bad' : 'wait', doc.state ? 'Sim unreachable — last state' : 'Waiting for simulation');

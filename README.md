@@ -76,6 +76,7 @@ simulation:                       # all optional
     min_spacing: 20.0             # m
     altitude_fraction: 0.1        # point spacing <= this * altitude, but >= min_spacing...
     radius_fraction: 0.02         # ...and <= this * distance from the reference body
+    body_interval: 7200.0         # s between body-history samples (for re-framing trails)
 
 bodies:
   - id: earth
@@ -175,6 +176,17 @@ with `time` and `spacecraft`.
 `since = {id: [version, last_seq]}` returns only newer points (`full: false`). A `version`
 change (from thinning, staging or reset) means the client should replace its copy (`full: true`).
 
+**Body history.** To let a client draw a whole trail in one frame, the sim also samples every
+body's position and velocity every `body_interval` seconds. Interpolated with cubic Hermite
+polynomials, this reproduces the Moon's position to within a metre. Samples older than the
+oldest trail point are dropped. Pass `body_history: [version, last_seq]` (or `true` for
+everything) to `get_trails` to receive `body_history: {version, full, ids, samples, head}`,
+where:
+* each sample is `[seq, t, positions, velocities]`, with one `[x, y, z]` per body, in `ids` order;
+* `head` is the current state, `[t, positions, velocities]`, which brackets the newest trail
+  points;
+* a new `version` (after a reset) means the client should replace its copy.
+
 ### Example session (Python)
 
 ```python
@@ -244,10 +256,21 @@ offline.
   ten that follow the zoom. Spokes are every 30°, with the equator's ascending node on the
   ecliptic highlighted in teal (the vernal equinox ♈ for Earth), and an axis marks the north
   pole. The grid fades out as the camera leaves the sphere of influence, so the Sun has none.
-* Spacecraft trails (toggle with the checkbox or `T`): each craft's recorded trajectory,
-  drawn around its reference body's current position and fading with age. `viz_server.py`
-  keeps a cached copy that it updates incrementally, so the sim's load doesn't grow with the
-  number of open browsers.
+* **Spacecraft trails** (toggle with the checkbox or `T`): each craft's recorded trajectory,
+  fading with age.
+  * **One frame per trail:** each trail is drawn whole in one frame. Every point is
+    re-expressed, using the body history, relative to one body as it was when the point was
+    recorded, and drawn around that body's current position. So a trail stays continuous
+    when a craft crosses from one sphere of influence into another.
+  * **Choosing the frame:** "Trails drawn relative to" offers Auto or any body. Auto uses the
+    focused body, or for a focused craft the body whose sphere of influence it is in (the same
+    body the body grid shows).
+  * **What it looks like:** in Earth's frame, a lunar transfer is an arc out to where the Moon
+    was, and the time in lunar orbit shows as loops strung along the Moon's path. In the
+    Moon's frame, the approach curves into a closed lunar orbit.
+  * **Caching:** `viz_server.py` keeps cached copies of the trails and the body history and
+    updates them incrementally, so the sim's load doesn't grow with the number of open
+    browsers.
 * URL parameters: `?focus=<id>` sets the initial focus. `&dist=<km>` sets the initial camera
   distance from that object's centre.
 

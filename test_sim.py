@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-from nbody_sim import Simulation, SimError
+from nbody_sim import BodyTrajectory, Simulation, SimError
 
 HERE = Path(__file__).resolve().parent
 SCENARIO = HERE / "solar_system.yaml"
@@ -205,6 +205,46 @@ class PhysicsTests(unittest.TestCase):
         self.assertTrue(all(p[0] > full["points"][-1][0] for p in delta["points"]))
         self.assertEqual(delta["points"][0][2], "earth")
         self.assertTrue(sim.trails(since={"sat": [-1, 0]})["sat"]["full"])
+
+    def test_body_history(self):
+        sim = Simulation(SCENARIO)
+        h = sim.body_history
+        dt = h.interval
+        for _ in range(5):
+            sim.step(dt * 0.75)  # sample times don't line up with step ends
+        times = [x[1] for x in h.samples]
+        self.assertEqual(times, [k * dt for k in range(len(times))])
+        self.assertEqual(len(times), int(5 * 0.75) + 1)
+
+        # Hermite interpolation of the samples reproduces the Moon relative to Earth.
+        earth, luna = sim.body_by_id["earth"].index, sim.body_by_id["luna"].index
+        a, b = h.samples[-2], h.samples[-1]
+        traj = BodyTrajectory(a[1], dt, np.array([a[2], b[2]]), np.array([a[3], b[3]]))
+        mid = a[1] + 0.37 * dt
+        P, _ = traj.at(mid)
+        ref = Simulation(SCENARIO)
+        ref.step(mid)
+        self.assertLess(np.linalg.norm((P[luna] - P[earth]) - (ref.bpos[luna] - ref.bpos[earth])), 1.0)
+
+        # Incremental fetch, version change on reset, pruning to the oldest trail point.
+        full = sim.body_history_since(None)
+        self.assertTrue(full["full"])
+        self.assertEqual(full["ids"][0], "sun")
+        self.assertEqual(full["head"][0], sim.time)
+        sim.step(dt)
+        delta = sim.body_history_since([full["version"], full["samples"][-1][0]])
+        self.assertFalse(delta["full"])
+        self.assertEqual(len(delta["samples"]), 1)
+        sim.remove_spacecraft("falcon9")  # its trail started at t = 0
+        sim.add_spacecraft({"id": "probe", "mass": 1.0, "initial_state": {
+            "frame": "relative", "body": "earth", "position": [7e6, 0, 0], "velocity": [0, 7546, 0]}})
+        sim.step(dt)
+        self.assertLessEqual(h.samples[1][1], sim.spacecraft["probe"].trail.points[0][1] + dt)
+        self.assertLessEqual(h.samples[0][1], sim.spacecraft["probe"].trail.points[0][1])
+        version = h.version
+        sim.load()
+        self.assertNotEqual(sim.body_history.version, version)
+        self.assertEqual(len(sim.body_history.samples), 1)
 
     def test_trail_reference_bodies(self):
         sim = Simulation(SCENARIO)

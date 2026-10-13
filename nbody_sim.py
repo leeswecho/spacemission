@@ -59,6 +59,7 @@ DEFAULT_SETTINGS = {
         "min_spacing": 20.0,        # m
         "altitude_fraction": 0.1,   # spacing <= this * altitude (finer near surfaces)...
         "radius_fraction": 0.02,    # ...and <= this * distance from the reference body
+        "body_interval": 7200.0,    # s between samples of the body history (for re-framing trails)
     },
 }
 
@@ -347,6 +348,35 @@ class Trail:
         self.version = next(_TRAIL_VERSIONS)
 
 
+class BodyHistory:
+    """Body positions and velocities sampled every ``interval`` seconds.
+
+    Trail points are stored relative to their reference body; with this
+    history a client can re-express any past point relative to any other
+    body (cubic-Hermite interpolation between samples), so a whole trail can
+    be drawn in one frame.  Samples older than the oldest trail point are
+    pruned.  Samples are (seq, t, positions (N, 3), velocities (N, 3)).
+    """
+
+    def __init__(self, interval):
+        self.interval = interval
+        self.samples = []
+        self.next_seq = 0
+        self.version = next(_TRAIL_VERSIONS)
+
+    def add(self, t, P, V):
+        self.samples.append((self.next_seq, float(t), np.array(P, dtype=float), np.array(V, dtype=float)))
+        self.next_seq += 1
+
+    def prune(self, t_keep):
+        """Drop samples no longer needed to bracket times >= t_keep (keeping at least two)."""
+        k = 0
+        while k + 2 < len(self.samples) and self.samples[k + 1][1] <= t_keep:
+            k += 1
+        if k:
+            del self.samples[:k]
+
+
 MAX_MODEL_JSON = 4096
 
 
@@ -468,6 +498,9 @@ class Simulation:
         self.bvel = np.array([b.initial_velocity for b in self.bodies])
         self.time = 0.0
         self.step_count = 0
+
+        self.body_history = BodyHistory(self.trail_settings["body_interval"])
+        self.body_history.add(self.time, self.bpos, self.bvel)
 
         self.spacecraft = {}
         for i, spec in enumerate(cfg.get("spacecraft") or []):
@@ -781,6 +814,21 @@ class Simulation:
                 return
         tr.add(t, ref, rel, last is None, s["max_points"])
 
+    def body_history_since(self, since=None):
+        """Body history samples newer than since = [version, seq] (all of them for a new version),
+        plus the current state as an unrecorded "head" sample to bracket the newest trail points."""
+        h = self.body_history
+        full = not (isinstance(since, (list, tuple)) and len(since) == 2 and since[0] == h.version
+                    and isinstance(since[1], (int, float)))
+        samples = h.samples if full else [x for x in h.samples if x[0] > since[1]]
+        return {
+            "version": h.version,
+            "full": full,
+            "ids": [b.id for b in self.bodies],
+            "samples": [[x[0], x[1], x[2].tolist(), x[3].tolist()] for x in samples],
+            "head": [self.time, self.bpos.tolist(), self.bvel.tolist()],
+        }
+
     def trails(self, since=None, ids=None):
         """Trail data per craft; with ``since`` = {id: [version, seq]}, only new points."""
         since = since if isinstance(since, dict) else {}
@@ -816,10 +864,22 @@ class Simulation:
         traj = self._advance_bodies(dt)
         for sc in self.spacecraft.values():
             self._advance_spacecraft(sc, traj, self.time, dt, events)
+        self._record_body_history(traj, self.time, self.time + dt)
         self.bpos, self.bvel = traj.P[-1].copy(), traj.V[-1].copy()
         self.time += dt
         self.step_count += 1
         return events
+
+    def _record_body_history(self, traj, t0, t1):
+        h = self.body_history
+        t = h.samples[-1][1] + h.interval if h.samples else t0
+        while t <= t1 + 1e-9:
+            if t >= t0:
+                P, V = traj.at(t)
+                h.add(t, P, V)
+            t += h.interval
+        oldest = min((sc.trail.points[0][1] for sc in self.spacecraft.values() if sc.trail.points), default=t1)
+        h.prune(oldest)
 
     def set_thrust(self, sc_id, force, mass_rate=0.0, frame="inertial", body=None):
         sc = self._craft(sc_id)
@@ -1069,7 +1129,11 @@ class CommandHandler:
         return {"spacecraft": sc_id}
 
     def cmd_get_trails(self, req):
-        return {"trails": self.sim.trails(req.get("since"), req.get("ids"))}
+        reply = {"trails": self.sim.trails(req.get("since"), req.get("ids"))}
+        if req.get("body_history"):  # [version, seq] the client holds, or true for everything
+            known = req["body_history"]
+            reply["body_history"] = self.sim.body_history_since(known if isinstance(known, list) else None)
+        return reply
 
     def cmd_reset(self, req):
         self.sim.load()

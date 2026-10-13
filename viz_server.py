@@ -40,6 +40,7 @@ class StatePoller(threading.Thread):
         self.payload = self._encode({"connected": False, "error": "waiting for first reply", "state": None})
         self.last_state = None
         self.trails = {}  # id -> {"version", "resting", "points"}
+        self.bodies = None  # body history: {"version", "ids", "samples", "head"}
 
     @staticmethod
     def _encode(obj):
@@ -67,7 +68,12 @@ class StatePoller(threading.Thread):
     def _update_trails(self):
         with self.lock:
             since = {i: [c["version"], c["points"][-1][0] if c["points"] else -1] for i, c in self.trails.items()}
-        reply = self.client.call("get_trails", since=since)["trails"]
+        with self.lock:
+            known = ([self.bodies["version"], self.bodies["samples"][-1][0] if self.bodies["samples"] else -1]
+                     if self.bodies else True)
+        full_reply = self.client.call("get_trails", since=since, body_history=known)
+        reply = full_reply["trails"]
+        bh = full_reply.get("body_history")
         updated = {}
         with self.lock:
             for sc_id, tr in reply.items():
@@ -79,13 +85,27 @@ class StatePoller(threading.Thread):
                 cached["resting"] = tr["resting"]
                 updated[sc_id] = cached
             self.trails = updated  # drops craft that no longer exist
+            if bh is not None:
+                if bh["full"] or self.bodies is None or self.bodies["version"] != bh["version"]:
+                    self.bodies = {"version": bh["version"], "ids": bh["ids"], "samples": bh["samples"]}
+                else:
+                    self.bodies["samples"].extend(bh["samples"])
+                    # Keep only what the oldest trail point still needs (the sim prunes the same way).
+                    oldest = min((c["points"][0][1] for c in updated.values() if c["points"]), default=None)
+                    s = self.bodies["samples"]
+                    k = 0
+                    while oldest is not None and k + 2 < len(s) and s[k + 1][1] <= oldest:
+                        k += 1
+                    del s[:k]
+                self.bodies["head"] = bh["head"]
 
     def latest(self):
         with self.lock:
             return self.payload
 
-    def trails_since(self, since):
-        """Trails for a browser that already holds {id: [version, seq]}."""
+    def trails_since(self, since, bodies_since=None):
+        """Trails for a browser that already holds {id: [version, seq]}, plus the body
+        history samples newer than bodies_since = [version, seq]."""
         out = {}
         with self.lock:
             for sc_id, c in self.trails.items():
@@ -99,7 +119,15 @@ class StatePoller(threading.Thread):
                         k -= 1
                     pts = pts[k:]
                 out[sc_id] = {"version": c["version"], "full": full, "resting": c["resting"], "points": list(pts)}
-        return self._encode({"trails": out})
+            bodies = None
+            if self.bodies is not None:
+                b = self.bodies
+                full = not (isinstance(bodies_since, list) and len(bodies_since) == 2
+                            and bodies_since[0] == b["version"])
+                samples = b["samples"] if full else [x for x in b["samples"] if x[0] > bodies_since[1]]
+                bodies = {"version": b["version"], "full": full, "ids": b["ids"], "samples": samples,
+                          "head": b.get("head")}
+        return self._encode({"trails": out, "bodies": bodies})
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -125,13 +153,18 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json_bytes(self.poller.latest())
             return
         if path == "/api/trails":
-            # ?since=<JSON {id: [version, seq]}>; anything unparsable means "send everything".
-            raw = parse_qs(query).get("since", ["{}"])[0]
+            # ?since=<JSON {id: [version, seq]}>&bodies=<JSON [version, seq]> (body history held);
+            # anything unparsable means "send everything".
+            q = parse_qs(query)
             try:
-                since = json.loads(raw)
+                since = json.loads(q.get("since", ["{}"])[0])
             except json.JSONDecodeError:
                 since = {}
-            self._send_json_bytes(self.poller.trails_since(since))
+            try:
+                bodies_since = json.loads(q.get("bodies", ["null"])[0])
+            except json.JSONDecodeError:
+                bodies_since = None
+            self._send_json_bytes(self.poller.trails_since(since, bodies_since))
             return
         super().do_GET()
 

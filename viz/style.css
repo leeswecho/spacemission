@@ -167,3 +167,13 @@ kbd {
 @media (max-width: 640px) {
   #panel { top: auto; bottom: 12px; left: 12px; right: 12px; width: auto; max-height: 45vh; }
 }
+.frame-select { display: flex; align-items: center; gap: 6px; margin: 4px 0 0 20px; font-size: 12px; color: var(--muted); }
+.frame-select select {
+  font: inherit;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 4px;
+}
+.frame-select option { background: #0b1020; color: var(--text); }
