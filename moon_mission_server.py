@@ -83,7 +83,7 @@ class MissionControl:
 class Handler(SimpleHTTPRequestHandler):
     # Windows can map .js to text/plain via the registry, which breaks ES modules.
     extensions_map = {**SimpleHTTPRequestHandler.extensions_map,
-                      ".js": "text/javascript", ".mjs": "text/javascript"}
+                      ".js": "text/javascript", ".mjs": "text/javascript", ".svg": "image/svg+xml"}
 
     def __init__(self, *args, control=None, config=None, **kwargs):
         self.control = control

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Rocket, tilted for take-off: flame, fins, body, window. -->
+  <g transform="translate(16 16) scale(1.32) rotate(45) translate(-16 -16.6)" stroke="#1b2333" stroke-width="1.1" stroke-linejoin="round">
+    <path d="M13.2 25.2 Q16 32 18.8 25.2 Z" fill="#ffb547"/>
+    <path d="M14.6 25.2 Q16 29 17.4 25.2 Z" fill="#fff3c4" stroke="none"/>
+    <path d="M12.2 18.5 L8.6 24.2 L12.4 24.6 Z" fill="#ff6b6b"/>
+    <path d="M19.8 18.5 L23.4 24.2 L19.6 24.6 Z" fill="#ff6b6b"/>
+    <path d="M16 2.5 Q21 8 20.2 19 L19.6 25.2 L12.4 25.2 L11.8 19 Q11 8 16 2.5 Z" fill="#eef2f7"/>
+    <circle cx="16" cy="12.5" r="2.4" fill="#3f7fd9"/>
+  </g>
+</svg>
