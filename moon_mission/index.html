@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Moon Mission Planner</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">Mission</p>
+      <h1>To the Moon and back, one part at a time</h1>
+    </div>
+    <div class="topbar-right">
+      <span id="sim-status" class="pill pill-wait">Connecting…</span>
+      <a id="viewer-link" class="link" href="#" target="_blank" rel="noopener">Open 3D viewer ↗</a>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="card" id="plan">
+      <div class="tabs" role="tablist" aria-label="Mission parts">
+        <button type="button" role="tab" id="tab-launch" aria-controls="panel-launch" data-part="launch"><span class="num">1</span>Stage in Earth orbit</button>
+        <button type="button" role="tab" id="tab-transfer" aria-controls="panel-transfer" data-part="transfer"><span class="num">2</span>Transfer to the Moon</button>
+        <button type="button" role="tab" id="tab-landing" aria-controls="panel-landing" data-part="landing"><span class="num">3</span>Land and return to orbit</button>
+        <button type="button" role="tab" id="tab-return" aria-controls="panel-return" data-part="return"><span class="num">4</span>Return to Earth</button>
+      </div>
+
+      <!-- 1. Staging in Earth orbit ------------------------------------------- -->
+      <form id="panel-launch" class="part-form" data-part="launch" role="tabpanel" aria-labelledby="tab-launch" novalidate>
+        <p class="lede">Launch a rocket from LC-39A to put payload, propellant or both into an Earth orbit.
+          Whatever propellant the upper stage still holds once the payload is in orbit counts as
+          delivered propellant; launch with no payload to fly a pure tanker.</p>
+        <fieldset>
+          <legend>Which <strong>rocket</strong> should fly?</legend>
+          <div class="choices rockets" data-role="rockets"></div>
+          <details class="vehicle" data-role="vehicle-details">
+            <summary>Adjust masses, thrust and propellant flow <span class="tag hidden" data-role="vehicle-edited">edited</span></summary>
+            <p class="help">Approximate public figures. Changing the rocket above restores its defaults.</p>
+            <div data-role="stages"></div>
+            <div class="actions"><button type="button" data-role="vehicle-reset">Restore defaults</button></div>
+          </details>
+        </fieldset>
+        <fieldset>
+          <legend>Into which <strong>Earth orbit</strong>?</legend>
+          <div class="presets" data-presets="earth" data-prefix=""></div>
+          <div class="grid3">
+            <label class="field"><span class="field-name">Perigee</span><span class="field-row">
+              <input type="number" step="any" data-key="perigee_km" data-err="Perigee" value="200"><span class="unit">km</span></span></label>
+            <label class="field"><span class="field-name">Apogee</span><span class="field-row">
+              <input type="number" step="any" data-key="apogee_km" data-err="Apogee" value="200"><span class="unit">km</span></span></label>
+            <label class="field"><span class="field-name">Inclination</span><span class="field-row">
+              <input type="number" step="any" data-key="inclination_deg" data-err="From Cape|Inclination" value="28.7"><span class="unit">°</span></span></label>
+          </div>
+          <p class="help">200–40,000 km. From Cape Canaveral the inclination must be at least 28.7°.</p>
+        </fieldset>
+        <fieldset>
+          <legend>How much <strong>payload</strong>?</legend>
+          <div class="answer"><input type="number" step="any" data-key="payload_kg" data-err="Payload|Liftoff thrust" value="10000">
+            <span class="unit">kg</span></div>
+          <p class="help">Use 0 for a tanker flight that only delivers propellant.</p>
+        </fieldset>
+        <fieldset>
+          <legend>Playback speed and simulation</legend>
+          <div class="choices compact">
+            <label><input type="radio" name="pace-launch" data-key="pace" value="watch" checked><span><strong>Watchable</strong><small>×5 during burns, ×200 while coasting</small></span></label>
+            <label><input type="radio" name="pace-launch" data-key="pace" value="x5"><span><strong>×5</strong><small>the whole time</small></span></label>
+            <label><input type="radio" name="pace-launch" data-key="pace" value="fast"><span><strong>Fast</strong><small>×50 / ×2,000</small></span></label>
+            <label><input type="radio" name="pace-launch" data-key="pace" value="max"><span><strong>As fast as possible</strong></span></label>
+          </div>
+          <label class="check"><input type="checkbox" data-key="reset" checked><span>Reset the simulation first
+            <small>(clears anything else happening in the shared simulation)</small></span></label>
+        </fieldset>
+        <div class="feasibility" data-role="feasibility" aria-live="polite"></div>
+        <ul class="errors" data-role="errors" aria-live="polite"></ul>
+        <div class="actions"><button type="submit" class="primary" data-role="launch">Launch</button></div>
+      </form>
+
+      <!-- 2. Transfer to lunar orbit ----------------------------------------- -->
+      <form id="panel-transfer" class="part-form hidden" data-part="transfer" role="tabpanel" aria-labelledby="tab-transfer" novalidate>
+        <p class="lede">Assume the payload and propellant are already in Earth orbit, assembled into one
+          Moon-bound vehicle. The autopilot picks the departure point, injects toward the Moon, corrects
+          course on the way and brakes into the lunar orbit you choose.</p>
+        <fieldset>
+          <legend>Where is the vehicle <strong>assembled</strong>?</legend>
+          <div class="presets" data-presets="earth" data-prefix="start_"></div>
+          <div class="grid3">
+            <label class="field"><span class="field-name">Perigee</span><span class="field-row">
+              <input type="number" step="any" data-key="start_periapsis_km" data-err="Starting perigee" value="200"><span class="unit">km</span></span></label>
+            <label class="field"><span class="field-name">Apogee</span><span class="field-row">
+              <input type="number" step="any" data-key="start_apoapsis_km" data-err="Starting apogee" value="200"><span class="unit">km</span></span></label>
+            <label class="field"><span class="field-name">Inclination</span><span class="field-row">
+              <input type="number" step="any" data-key="start_inclination_deg" data-err="Starting inclination" value="28.7"><span class="unit">°</span></span></label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>What is the vehicle made of?</legend>
+          <div class="grid2">
+            <label class="field"><span class="field-name">Payload: everything but propellant, engines included</span><span class="field-row">
+              <input type="number" step="any" data-key="payload_kg" data-err="Payload|Engine mass" value="15000"><span class="unit">kg</span></span></label>
+            <label class="field"><span class="field-name">Propellant</span><span class="field-row">
+              <input type="number" step="any" data-key="propellant_kg" data-err="Propellant" value="24000"><span class="unit">kg</span></span></label>
+          </div>
+          <div class="engine-picker" data-role="engines" data-default-key="rl10b2" data-default-count="2"></div>
+        </fieldset>
+        <fieldset>
+          <legend>Which <strong>lunar orbit</strong>?</legend>
+          <div class="presets" data-presets="lunar" data-prefix="target_"></div>
+          <div class="grid3">
+            <label class="field"><span class="field-name">Perilune</span><span class="field-row">
+              <input type="number" step="any" data-key="target_periapsis_km" data-err="Target perilune" value="100"><span class="unit">km</span></span></label>
+            <label class="field"><span class="field-name">Apolune</span><span class="field-row">
+              <input type="number" step="any" data-key="target_apoapsis_km" data-err="Target apolune" value="100"><span class="unit">km</span></span></label>
+            <label class="field"><span class="field-name">Inclination to the lunar equator</span><span class="field-row">
+              <input type="number" step="any" data-key="target_inclination_deg" data-err="Target lunar inclination" value="90"><span class="unit">°</span></span></label>
+          </div>
+          <p class="help">15–10,000 km above the surface; any inclination (0° equatorial, 90° polar, above 90° retrograde).</p>
+        </fieldset>
+        <fieldset data-role="pace-block"></fieldset>
+        <div class="feasibility" data-role="feasibility" aria-live="polite"></div>
+        <ul class="errors" data-role="errors" aria-live="polite"></ul>
+        <div class="actions"><button type="submit" class="primary" data-role="launch">Fly to the Moon</button></div>
+      </form>
+
+      <!-- 3. Landing and return to lunar orbit ------------------------------- -->
+      <form id="panel-landing" class="part-form hidden" data-part="landing" role="tabpanel" aria-labelledby="tab-landing" novalidate>
+        <p class="lede">Assume the payload and propellant are in lunar orbit. Part of them becomes a lander,
+          which lands at your site, leaves cargo, waits and climbs back to the same orbit's altitude. The
+          rest stays in orbit.</p>
+        <fieldset>
+          <legend>Starting <strong>lunar orbit</strong></legend>
+          <div class="presets" data-presets="lunar" data-prefix="start_"></div>
+          <div class="grid3">
+            <label class="field"><span class="field-name">Perilune</span><span class="field-row">
+              <input type="number" step="any" data-key="start_periapsis_km" data-err="Perilune" value="100"><span class="unit">km</span></span></label>
+            <label class="field"><span class="field-name">Apolune</span><span class="field-row">
+              <input type="number" step="any" data-key="start_apoapsis_km" data-err="Apolune" value="100"><span class="unit">km</span></span></label>
+            <label class="field"><span class="field-name">Inclination to the lunar equator</span><span class="field-row">
+              <input type="number" step="any" data-key="start_inclination_deg" data-err="Lunar inclination" value="90"><span class="unit">°</span></span></label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>What is available in orbit, and how much becomes the <strong>lander</strong>?</legend>
+          <div class="grid2">
+            <label class="field"><span class="field-name">Payload: everything but propellant</span><span class="field-row">
+              <input type="number" step="any" data-key="payload_kg" data-err="Payload mass|Engine mass" value="20000"><span class="unit">kg</span></span></label>
+            <label class="field"><span class="field-name">Propellant</span><span class="field-row">
+              <input type="number" step="any" data-key="propellant_kg" data-err="Propellant mass" value="16000"><span class="unit">kg</span></span></label>
+            <label class="field"><span class="field-name">Lander's share of the payload</span><span class="field-row">
+              <input type="number" step="any" data-key="lander_payload_pct" data-err="Lander share of the payload|Engine mass" value="40"><span class="unit">%</span></span></label>
+            <label class="field"><span class="field-name">Lander's share of the propellant</span><span class="field-row">
+              <input type="number" step="any" data-key="lander_propellant_pct" data-err="Lander share of the propellant" value="100"><span class="unit">%</span></span></label>
+          </div>
+          <p class="derived" data-role="split"></p>
+          <p class="help flush">The lander's engines are part of its payload share. The same engines fly the descent and the ascent.</p>
+          <div class="engine-picker" data-role="engines" data-default-key="rl10_cece" data-default-count="1" data-landing="1"></div>
+        </fieldset>
+        <fieldset>
+          <legend>Where should it <strong>land</strong>, and what stays on the surface?</legend>
+          <div class="presets" data-role="sites"></div>
+          <div class="grid3">
+            <label class="field"><span class="field-name">Latitude</span><span class="field-row">
+              <input type="number" step="any" data-key="site_lat" data-err="Site latitude|Lunar inclination" value="0.674"><span class="unit">°</span></span></label>
+            <label class="field"><span class="field-name">Longitude (east +)</span><span class="field-row">
+              <input type="number" step="any" data-key="site_lon" data-err="Site longitude" value="23.473"><span class="unit">°</span></span></label>
+            <input type="hidden" data-key="site_name" value="Apollo 11 - Tranquility Base">
+          </div>
+          <p class="help flush" data-role="site-name">Apollo 11 - Tranquility Base</p>
+          <div class="grid3">
+            <label class="field"><span class="field-name">Payload left on the surface</span><span class="field-row">
+              <input type="number" step="any" data-key="surface_payload_kg" data-err="Payload left" value="1000"><span class="unit">kg</span></span></label>
+            <label class="field"><span class="field-name">Propellant left on the surface</span><span class="field-row">
+              <input type="number" step="any" data-key="surface_propellant_kg" data-err="Propellant left" value="0"><span class="unit">kg</span></span></label>
+            <label class="field"><span class="field-name">Minimum surface stay</span><span class="field-row">
+              <input type="number" step="any" data-key="stay_hours" data-err="Minimum surface stay" value="24"><span class="unit">h</span></span></label>
+          </div>
+          <div class="choices compact">
+            <label><input type="radio" name="liftoff" data-key="liftoff" value="plane" checked><span><strong>Lift off when the site passes under the orbit's plane</strong>
+              <small>Apollo-style: back into the very same orbit plane. The Moon turns slowly, so this can mean waiting up to about two weeks.</small></span></label>
+            <label><input type="radio" name="liftoff" data-key="liftoff" value="asap"><span><strong>Lift off right after the minimum stay</strong>
+              <small>Into an orbit of the same altitude and inclination, but turned to pass over the site at liftoff.</small></span></label>
+          </div>
+        </fieldset>
+        <fieldset data-role="pace-block"></fieldset>
+        <div class="feasibility" data-role="feasibility" aria-live="polite"></div>
+        <ul class="errors" data-role="errors" aria-live="polite"></ul>
+        <div class="actions"><button type="submit" class="primary" data-role="launch">Land</button></div>
+      </form>
+
+      <!-- 4. Return to Earth orbit ------------------------------------------- -->
+      <form id="panel-return" class="part-form hidden" data-part="return" role="tabpanel" aria-labelledby="tab-return" novalidate>
+        <p class="lede">Assume a vehicle in lunar orbit. The autopilot picks the departure point, injects
+          toward Earth, corrects course on the way and brakes into the Earth orbit you choose (with
+          engines only, no aerobraking).</p>
+        <fieldset>
+          <legend>Starting <strong>lunar orbit</strong></legend>
+          <div class="presets" data-presets="lunar" data-prefix="start_"></div>
+          <div class="grid3">
+            <label class="field"><span class="field-name">Perilune</span><span class="field-row">
+              <input type="number" step="any" data-key="start_periapsis_km" data-err="Starting perilune" value="100"><span class="unit">km</span></span></label>
+            <label class="field"><span class="field-name">Apolune</span><span class="field-row">
+              <input type="number" step="any" data-key="start_apoapsis_km" data-err="Starting apolune" value="100"><span class="unit">km</span></span></label>
+            <label class="field"><span class="field-name">Inclination to the lunar equator</span><span class="field-row">
+              <input type="number" step="any" data-key="start_inclination_deg" data-err="Starting lunar inclination" value="20"><span class="unit">°</span></span></label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>What is the vehicle made of?</legend>
+          <div class="grid2">
+            <label class="field"><span class="field-name">Payload: everything but propellant, engines included</span><span class="field-row">
+              <input type="number" step="any" data-key="payload_kg" data-err="Payload|Engine mass" value="10000"><span class="unit">kg</span></span></label>
+            <label class="field"><span class="field-name">Propellant</span><span class="field-row">
+              <input type="number" step="any" data-key="propellant_kg" data-err="Propellant" value="15000"><span class="unit">kg</span></span></label>
+          </div>
+          <div class="engine-picker" data-role="engines" data-default-key="rl10b2" data-default-count="1"></div>
+        </fieldset>
+        <fieldset>
+          <legend>Into which <strong>Earth orbit</strong>?</legend>
+          <div class="presets" data-presets="earth" data-prefix="target_"></div>
+          <div class="grid3">
+            <label class="field"><span class="field-name">Perigee</span><span class="field-row">
+              <input type="number" step="any" data-key="target_periapsis_km" data-err="Target perigee" value="400"><span class="unit">km</span></span></label>
+            <label class="field"><span class="field-name">Apogee</span><span class="field-row">
+              <input type="number" step="any" data-key="target_apoapsis_km" data-err="Target apogee" value="400"><span class="unit">km</span></span></label>
+            <label class="field"><span class="field-name">Inclination</span><span class="field-row">
+              <input type="number" step="any" data-key="target_inclination_deg" data-err="Target inclination" value="51.6"><span class="unit">°</span></span></label>
+          </div>
+          <p class="help">200–40,000 km; any inclination.</p>
+        </fieldset>
+        <fieldset data-role="pace-block"></fieldset>
+        <div class="feasibility" data-role="feasibility" aria-live="polite"></div>
+        <ul class="errors" data-role="errors" aria-live="polite"></ul>
+        <div class="actions"><button type="submit" class="primary" data-role="launch">Fly home</button></div>
+      </form>
+    </section>
+
+    <!-- Flight ---------------------------------------------------------------- -->
+    <section class="card" id="flight">
+      <div class="flight-head">
+        <h2>Flight <span class="muted small" id="flight-part"></span></h2>
+        <span id="mission-state" class="pill pill-idle">Not launched</span>
+      </div>
+      <div id="result" class="result hidden"></div>
+
+      <ol id="phases" class="phases"></ol>
+
+      <h3>Telemetry <span class="muted small" id="tel-vehicle"></span></h3>
+      <dl id="telemetry" class="telemetry"></dl>
+
+      <div class="actions">
+        <button id="abort" class="danger" disabled>Abort mission</button>
+      </div>
+
+      <h3>Flight log</h3>
+      <ol id="log" class="log"></ol>
+    </section>
+  </main>
+
+  <template id="pace-template">
+    <legend>Playback speed and simulation</legend>
+    <div class="choices compact">
+      <label><input type="radio" data-key="pace" value="watch" checked><span><strong>Watchable</strong><small>×5 during burns, ×3,000 while coasting (a few minutes per part)</small></span></label>
+      <label><input type="radio" data-key="pace" value="fast"><span><strong>Fast</strong><small>×50 during burns, ×50,000 while coasting</small></span></label>
+      <label><input type="radio" data-key="pace" value="max"><span><strong>As fast as possible</strong><small>Usually under a minute</small></span></label>
+    </div>
+    <label class="check"><input type="checkbox" data-key="reset" checked><span>Reset the simulation first
+      <small>(clears anything else happening in the shared simulation)</small></span></label>
+  </template>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

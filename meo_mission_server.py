@@ -17,6 +17,7 @@ import functools
 import json
 import threading
 import time
+import urllib.request
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -27,12 +28,28 @@ PAGE_DIR = Path(__file__).resolve().parent / "meo_mission"
 MAX_BODY = 64 * 1024
 
 
+def other_mission_running(url):
+    """True if the mission page at url (its /api/mission) reports a mission in flight.
+
+    The Earth-orbit and Moon pages share one simulation, so each refuses to
+    launch while the other is flying.  An unreachable page counts as idle.
+    """
+    if not url:
+        return False
+    try:
+        with urllib.request.urlopen(url, timeout=1.5) as res:
+            return json.load(res).get("state") == "running"
+    except Exception:
+        return False
+
+
 class MissionControl:
     """Owns the mission status and the autopilot thread."""
 
-    def __init__(self, endpoint, timeout_ms):
+    def __init__(self, endpoint, timeout_ms, other_mission=None):
         self.endpoint = endpoint
         self.timeout_ms = timeout_ms
+        self.other_mission = other_mission
         self.status = ap.MissionStatus()
         self.thread = None
         self.start_lock = threading.Lock()
@@ -59,6 +76,9 @@ class MissionControl:
         with self.start_lock:
             if self.thread and self.thread.is_alive():
                 return 409, {"ok": False, "errors": ["A mission is already in flight."]}
+            if other_mission_running(self.other_mission):
+                return 409, {"ok": False, "errors": ["The Moon mission page has a mission flying in the shared "
+                                                     "simulation; wait for it to finish."]}
             self.status.begin(params, est)
             mission = ap.MeoMission(SimClient(self.endpoint, timeout_ms=self.timeout_ms), params, self.status)
             self.thread = threading.Thread(target=mission.run, name="meo-autopilot", daemon=True)
@@ -180,9 +200,11 @@ def main(argv=None):
     parser.add_argument("--timeout", type=int, default=120000, help="simulation reply timeout in ms (default 120000)")
     parser.add_argument("--viewer-url", default=None,
                         help="URL of the 3D viewer to link to (default: same host, port 8080)")
+    parser.add_argument("--other-mission", default="http://127.0.0.1:8082/api/mission",
+                        help="mission status URL of the Moon page sharing the simulation ('' for none)")
     args = parser.parse_args(argv)
 
-    control = MissionControl(args.sim, args.timeout)
+    control = MissionControl(args.sim, args.timeout, args.other_mission)
     server = ThreadingHTTPServer((args.host, args.port),
                                  functools.partial(Handler, control=control, config=page_config(args.viewer_url)))
     print(f"[meo_mission] simulation at {args.sim}", flush=True)

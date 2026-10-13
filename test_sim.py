@@ -608,5 +608,87 @@ class MissionServerTest(unittest.TestCase):
                 p.wait(timeout=10)
 
 
+MOON_CASES = {
+    "transfer": {"start_periapsis_km": 200, "start_apoapsis_km": 200, "start_inclination_deg": 28.7,
+                 "target_periapsis_km": 100, "target_apoapsis_km": 100, "target_inclination_deg": 90,
+                 "payload_kg": 15000, "propellant_kg": 24000, "engine": {"key": "rl10b2", "count": 2}},
+    "landing": {"start_periapsis_km": 100, "start_apoapsis_km": 100, "start_inclination_deg": 90,
+                "payload_kg": 20000, "propellant_kg": 16000, "lander_payload_pct": 40, "lander_propellant_pct": 100,
+                "engine": {"key": "rl10_cece", "count": 1}, "site_lat": 20.191, "site_lon": 30.772,
+                "site_name": "Apollo 17", "surface_payload_kg": 1000, "surface_propellant_kg": 200,
+                "stay_hours": 2, "liftoff": "asap"},
+    "return": {"start_periapsis_km": 100, "start_apoapsis_km": 100, "start_inclination_deg": 20,
+               "target_periapsis_km": 400, "target_apoapsis_km": 400, "target_inclination_deg": 51.6,
+               "payload_kg": 10000, "propellant_kg": 15000, "engine": {"key": "rl10b2", "count": 1}},
+}
+
+
+class MoonAutopilotTest(unittest.TestCase):
+    def test_validation(self):
+        import moon_autopilot as ma
+        for part, raw in MOON_CASES.items():
+            params, errors, est, phases = ma.validate(part, raw)
+            self.assertEqual(errors, [], part)
+            self.assertGreater(est["propellant_left"], 0, part)
+            self.assertTrue(phases)
+        params, errors, est, phases = ma.validate("launch", {"perigee_km": 200, "apogee_km": 200,
+                                                             "inclination_deg": 28.7, "payload_kg": 0})
+        self.assertEqual(errors, [])
+        bad = [
+            ("transfer", {"payload_kg": 500}),                                 # lighter than its engines
+            ("transfer", {"engine": {"key": "warp_drive"}}),
+            ("transfer", {"engine": {"key": "custom", "custom": {"thrust": 1e5, "isp": 900, "mass": 100,
+                                                                 "min_throttle": 1}}}),
+            ("transfer", {"target_periapsis_km": 5}),                          # below 15 km
+            ("transfer", {"engine": {"key": "aj10_190", "count": 1}}),        # TLI burn far too long
+            ("landing", {"start_inclination_deg": 10}),                        # orbit never passes over 20° N
+            ("landing", {"surface_payload_kg": 9000}),                         # more than the lander carries
+            ("landing", {"surface_propellant_kg": 20000}),
+            ("landing", {"engine": {"key": "j2", "count": 1}}),                # can't throttle down to land
+            ("landing", {"engine": {"key": "apollo_aps", "count": 1}}),        # thrust-to-weight below 1
+            ("landing", {"liftoff": "now"}),
+            ("return", {"target_periapsis_km": 100}),                          # below the Earth minimum
+            ("nowhere", {}),
+        ]
+        for part, change in bad:
+            raw = {**MOON_CASES.get(part, {}), **change}
+            self.assertTrue(ma.validate(part, raw)[1], (part, change))
+
+    def test_flights(self):
+        import moon_autopilot as ma
+        from sim_client import SimClient
+
+        endpoint = "tcp://127.0.0.1:5595"
+        sim = subprocess.Popen([sys.executable, str(HERE / "nbody_sim.py"), str(SCENARIO), "--endpoint", endpoint])
+        try:
+            for part, raw in MOON_CASES.items():
+                params, errors, est, phases = ma.validate(part, {**raw, "pace": "max", "reset": True})
+                self.assertEqual(errors, [])
+                status = ma.MoonStatus()
+                status.begin_part(part, params, est, phases, None)
+                ma.make_mission(SimClient(endpoint, timeout_ms=120000), params, status).run()
+                snap = status.snapshot()
+                self.assertEqual(snap["state"], "succeeded", (part, snap["message"]))
+                self.assertTrue(all(p["state"] == "done" for p in snap["phases"]), part)
+                d = snap["result"]["delivered"]
+                self.assertGreater(d["propellant_kg"], 0, part)
+                self.assertIn("Commands sent to the simulation", status.command_report())
+                if part == "landing":
+                    r = snap["result"]
+                    self.assertLess(r["landing"]["site_error_km"], 1.0)
+                    self.assertLess(r["landing"]["vertical"], ma.MAX_TOUCHDOWN[0])
+                    self.assertEqual(d["payload_kg"], 20000 - 1000)  # everything but the surface cargo
+                    client = SimClient(endpoint, timeout_ms=5000)
+                    cargo = client.get_spacecraft("surface_cargo", relative_to="luna")
+                    self.assertLess(cargo["nearest_body"]["altitude"], 5.0)
+                    self.assertEqual(cargo["model"]["parts"], ["cargo"])
+                    client.close()
+                else:
+                    self.assertEqual(d["payload_kg"], raw["payload_kg"])
+        finally:
+            sim.kill()
+            sim.wait(timeout=10)
+
+
 if __name__ == "__main__":
     unittest.main()

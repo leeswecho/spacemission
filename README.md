@@ -13,6 +13,7 @@ advances only when a client sends `step`.
 | `test_sim.py` | Tests (`python -m unittest test_sim -v`) |
 | `viz_server.py`, `viz/` | Web 3D viewer of the live state (see below) |
 | `meo_mission_server.py`, `meo_autopilot.py`, `launch_vehicles.py`, `meo_mission/` | Mission page: launch a chosen rocket to an Earth orbit, LEO to GTO (see below) |
+| `moon_mission_server.py`, `moon_autopilot.py`, `lunar_nav.py`, `engines.py`, `moon_mission/` | Moon mission page: four independent parts of a lunar mission (see below) |
 
 Requirements: Python 3.9+, `numpy`, `pyyaml`, `pyzmq`.
 
@@ -345,7 +346,95 @@ The Δv estimate is rough. It is fairly close for Falcon 9, Atlas V and New Glen
 optimistic for rockets whose first stage burns long and high, so for SLS it overstates the
 payload limit.
 
-Options: `--sim <endpoint>`, `--host`, `--port` (8081), `--timeout` (ms), `--viewer-url`.
+Options: `--sim <endpoint>`, `--host`, `--port` (8081), `--timeout` (ms), `--viewer-url`,
+`--other-mission` (the Moon page's `/api/mission`, default `http://127.0.0.1:8082/api/mission`).
+The two mission pages share one simulation, so neither launches while the other has a mission
+in flight.
+
+## Mission page: Moon mission in four parts
+
+```
+python moon_mission_server.py               # -> open http://127.0.0.1:8082/
+```
+
+For design iteration, a lunar mission is split into four parts that are flown independently,
+one tab each. Every tab is a questionnaire with a live feasibility estimate (Δv, propellant and
+burn time per burn, propellant left at the end). After a successful flight, buttons copy what
+was delivered into the next tab's starting point:
+
+1. **Stage in Earth orbit:** a rocket launch exactly as on the Earth-orbit page. The result
+   reports the delivered payload and the propellant still in the upper stage. With 0 kg of
+   payload, it's a tanker flight. "Add to tab 2's vehicle" adds the delivered payload and
+   propellant to tab 2's vehicle, so several launches can build one.
+2. **Transfer to the Moon:** a vehicle assembled in Earth orbit flies to a lunar orbit.
+   * **Inputs:** the starting Earth orbit, the payload (everything that isn't propellant,
+     engines included), the propellant, the engines, and the target lunar orbit (perilune,
+     apolune, inclination to the lunar equator).
+   * **Flight:** the autopilot places the vehicle in its starting orbit at the point and
+     orientation that suit the departure. It burns for the Moon (trans-lunar injection), makes
+     up to three course corrections, brakes into lunar orbit at perilune, and trims.
+3. **Land and return to orbit:** part of a vehicle in lunar orbit becomes a lander (a
+   percentage of the payload and of the propellant).
+   * **Inputs:** the lander's engines (the same engines fly the descent and the ascent), the
+     landing site (presets: Apollo 11, 15 and 17, Chang'e 4, the south pole), the payload and
+     propellant to leave on the surface, and a minimum stay.
+   * **Flight:**
+     1. The orbit is placed so that it passes over the site.
+     2. The lander separates and lowers its low point to 15 km.
+     3. It flies powered descent: braking guidance to 1 km above the site, an approach to
+        30 m, then a slow vertical descent to touchdown.
+     4. It unloads cargo (left behind as `surface_cargo`).
+     5. It lifts off, either when the site next passes under the orbit's plane (Apollo-style,
+        possibly up to about two weeks later) or right after the minimum stay into an orbit of
+        the same altitude and inclination.
+     6. It climbs back to the starting orbit's perilune and apolune.
+   * **Result:** the payload and propellant in lunar orbit afterwards (the lander plus what
+     stayed in orbit), what was left on the surface, and how accurate and gentle the landing
+     was. The lander doesn't rendezvous with the part that stayed in orbit.
+4. **Return to Earth:** a vehicle in lunar orbit flies back to an Earth orbit.
+   * **Flight:** trans-Earth injection, course corrections, and a burn at perigee into the
+     target orbit (engines only, no aerobraking), then trims.
+   * **Result:** the payload and propellant left in Earth orbit.
+
+How it works:
+* **Targeting (`lunar_nav.py`):** a fast predictor mirrors the simulator's gravity. It
+  integrates the bodies with the sim's RK4 from a snapshot of the sim, and the craft under the
+  Sun, Earth and Moon. Over a 3–5 day coast it agrees with the sim to about a kilometre.
+  * **Arrival at the Moon** is targeted in the B-plane (perilune radius and inclination).
+  * **Arrival at Earth** is targeted by perigee radius and inclination.
+  * Both use Newton iteration on impulsive velocity changes.
+  * Long burns follow the planned trajectory's energy, plane and periapsis direction; the
+    course corrections clean up afterwards.
+* **Engines (`engines.py`):** Apollo LM descent and ascent engines, the Apollo service-module
+  engine, AJ10-190, RL10B-2, RL10C-1, the RL10 deep-throttle (CECE) demonstrator, BE-7, J-2,
+  Merlin Vacuum, Raptor Vacuum and Raptor 2.
+  * Each engine has thrust, Isp, mass and lowest throttle setting. Approximate public figures;
+    engines in development are estimates.
+  * All four figures can be edited, or entered for a custom engine.
+  * Thrust can go as low as one engine at its lowest throttle (the others shut down). A lander
+    must be able to hover, so its lowest thrust must be below its weight on the Moon.
+* **Pacing:** Watchable (×5 in burns, ×3,000 while coasting: a few minutes per part, longer
+  for a long surface wait), Fast (×50 / ×50,000) or as fast as possible.
+* **Command log:** each flight's control commands download as a text report, as on the
+  Earth-orbit page.
+
+Tested, all within tolerance at "as fast as possible":
+* **Transfer:** 39 t (two RL10B-2) from a 200 km parking orbit to a 100 km polar lunar orbit,
+  arriving 100.0 × 100.1 km at 90.00°. 1,141 kg of propellant left; the estimate was 1,227 kg.
+* **Landings** at Apollo 11, Apollo 17 and the south pole, each from a different orbit and
+  with a different engine set (RL10 CECE, BE-7, Apollo descent engines). Each landed within
+  10 m of the site at under 1 m/s, and was back in its starting orbit within 1 km.
+* **Return:** from a 100 km lunar orbit to 400 km at 51.6°, arriving 400.0 × 400.0 km at 51.60°.
+
+Limitations:
+* The Moon is a smooth sphere; landing sites have no terrain.
+* The sim's lunar coordinates only approximately match selenographic ones.
+* The Moon's equator lies in the ecliptic in this scenario.
+* There is no rendezvous or docking.
+* Burns stay at full thrust apart from landing; there are no crew acceleration limits.
+
+Options: `--sim <endpoint>`, `--host`, `--port` (8082), `--timeout` (ms), `--viewer-url`,
+`--other-mission` (default `http://127.0.0.1:8081/api/mission`).
 
 ## Notes and limitations
 

@@ -208,11 +208,90 @@ function satellite(group, y0) {
   return y0 + 3.6;
 }
 
+// Generic vehicles of the Moon mission page:
+//   { vehicle: 'lunar', parts: ['tanks'|'lander'|'engines'|'cargo', ...], engines, engine_thrust, dry, prop }
+// A tank body sized from the masses (generic bulk densities), engine bells sized from thrust,
+// landing legs for a lander, and a pallet of crates for cargo left on the surface.
+function bellSize(thrust) {
+  const de = THREE.MathUtils.clamp(0.45 * Math.pow(Math.max(thrust, 1) / 1e4, 0.4), 0.35, 2.5);
+  return { de, len: 1.2 * de };
+}
+
+function engineBells(group, count, thrust, d, y0) {
+  const { de, len } = bellSize(thrust);
+  const ring = count === 1 ? 0 : Math.max(de * 0.6, d / 2 - de / 2 - 0.1);
+  for (let i = 0; i < count; i++) {
+    const a = (i / count) * Math.PI * 2;
+    const bell = cone(de, de * 0.35, len, ENGINE, y0 - len, 16);
+    bell.position.x = Math.cos(a) * ring;
+    bell.position.z = Math.sin(a) * ring;
+    group.add(bell);
+  }
+  return len;
+}
+
+function lunarVehicle(tag) {
+  const parts = new Set(tag.parts);
+  const prop = Math.max(0, tag.prop ?? 0);
+  const dry = Math.max(0, tag.dry ?? 0);
+  const group = new THREE.Group();
+  if (parts.has('cargo')) {  // crates on a pallet
+    const n = THREE.MathUtils.clamp(Math.ceil((dry + prop) / 1500), 1, 9);
+    const side = Math.ceil(Math.sqrt(n));
+    group.add(cylinder(side * 1.6 + 0.4, 0.2, 0x8a8f99, 0, 4));
+    for (let i = 0; i < n; i++) {
+      const crate = new THREE.Mesh(new THREE.BoxGeometry(1.3, 1.1, 1.3), material(i % 3 ? FOIL : WHITE));
+      crate.position.set(((i % side) - (side - 1) / 2) * 1.6, 0.75, (Math.floor(i / side) - (side - 1) / 2) * 1.6);
+      group.add(crate);
+    }
+    return { object: group, length: 1.4 };
+  }
+  const volume = prop / 800 + dry / 400 + 2;  // m^3
+  const d = THREE.MathUtils.clamp(Math.cbrt(volume / 1.2), 2.2, 9);
+  const l = Math.max(1.5, volume / (Math.PI * d * d / 4));
+  const lander = parts.has('lander');
+  let base = 0;
+  if (parts.has('engines') && tag.engines > 0) {
+    base = bellSize(tag.engine_thrust ?? 1e5).len;
+    engineBells(group, tag.engines, tag.engine_thrust ?? 1e5, d, base);
+  }
+  if (lander && !parts.has('tanks')) {
+    // Body on legs: four struts splayed out to footpads level with the engine exits.
+    const body = cylinder(d, l, FOIL, base, 8);
+    group.add(body);
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+      const top = new THREE.Vector3(Math.cos(a) * d * 0.45, base + l * 0.4, Math.sin(a) * d * 0.45);
+      const foot = new THREE.Vector3(Math.cos(a) * (d * 0.5 + 1.2), 0, Math.sin(a) * (d * 0.5 + 1.2));
+      const len = top.distanceTo(foot);
+      const strut = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, len, 6), material(WHITE));
+      strut.position.copy(top).add(foot).multiplyScalar(0.5);
+      strut.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), foot.clone().sub(top).normalize());
+      group.add(strut);
+      const pad = cylinder(0.6, 0.08, WHITE, 0, 10);
+      pad.position.x = foot.x;
+      pad.position.z = foot.z;
+      group.add(pad);
+    }
+    return { object: group, length: base + l };
+  }
+  group.add(cylinder(d, l, parts.has('tanks') ? WHITE : FOIL, base, 24));
+  group.add(cylinder(d * 1.01, 0.4, FOIL, base + l * 0.5 - 0.2, 24));
+  let top = base + l;
+  if (lander && parts.has('tanks')) {  // the lander rides on top of the stack
+    const ld = Math.min(d, 4.0);
+    group.add(cylinder(ld, ld * 0.8, FOIL, top, 8));
+    top += ld * 0.8;
+  }
+  return { object: group, length: top };
+}
+
 // Returns {object, length} (metres), or null if the tag isn't recognised.
 export function buildCraftModel(tag) {
   const v = VEHICLES[tag?.vehicle];
   const parts = new Set(Array.isArray(tag?.parts) ? tag.parts : []);
   if (!parts.size) return null;
+  if (tag.vehicle === 'lunar') return lunarVehicle(tag);
   const group = new THREE.Group();
 
   if (parts.size === 1 && parts.has('payload')) {

@@ -545,39 +545,24 @@ class MissionStatus:
 # The autopilot
 # ---------------------------------------------------------------------------
 
-class MeoMission:
-    def __init__(self, client, params, status):
+class SimFlight:
+    """Simulator plumbing shared by the autopilots: pacing, events, thrust, logging.
+
+    Subclasses set self.vehicle (the craft being flown) and self.phase_keys.
+    """
+
+    def __init__(self, client, status, warp):
         self.sim = RecordingClient(client, self._record_command)
         self.thrust_note = None
-        self.p = params
         self.status = status
-        self.warp = PACES[params["pace"]]
-        self.cfg = params["vehicle_config"]
-        self.vid = self.cfg["id"]
-        self.s1_id = f"{self.vid}_s1"
-        self.boosters_id = f"{self.vid}_boosters"
-        self.b = lv.boosters(self.cfg)
-        self.vehicle = self.vid
-        self.stage = "boost" if self.b else "core"   # which engines are attached: boost, core, upper
-        self.fairing_on = self.cfg["fairing"] > 0
+        self.warp = warp
+        self.vehicle = None
         self.last_thrust = None
-        self.liftoff_t = None
-        self.boost_end = None
-        self.core_depleted = False
         self.t = 0.0
         self._pace_anchor = None
-        self.payload = params["payload_kg"]
-        self.r_p_target = EARTH_RADIUS + params["perigee_km"] * 1e3
-        self.r_a_target = EARTH_RADIUS + params["apogee_km"] * 1e3
-        self.inc_target = params["inclination_deg"]
         self.pending_events = []
-        self.phase_keys = [k for k, _ in phases_for(self.cfg)]
+        self.phase_keys = []
         self.phase_index = -1
-        # What the vehicle craft is made of, for the viewer's model tag.
-        self.parts = ((["boosters"] if self.b else []) + ["core", "upper"]
-                      + (["fairing"] if self.fairing_on else []) + ["payload"])
-
-    # -- sim plumbing ---------------------------------------------------------
 
     def log(self, text, kind="info"):
         self.status.add_log(self.t, text, kind)
@@ -650,6 +635,39 @@ class MeoMission:
                if (kinds is None or e["event"] in kinds) and (craft is None or e["spacecraft"] == craft)]
         self.pending_events = [e for e in self.pending_events if e not in out]
         return out
+
+    def _safe_cut(self):
+        try:
+            self.cut()
+        except Exception:
+            pass
+
+
+class MeoMission(SimFlight):
+    def __init__(self, client, params, status):
+        super().__init__(client, status, PACES[params["pace"]])
+        self.p = params
+        self.cfg = params["vehicle_config"]
+        self.vid = self.cfg["id"]
+        self.s1_id = f"{self.vid}_s1"
+        self.boosters_id = f"{self.vid}_boosters"
+        self.b = lv.boosters(self.cfg)
+        self.vehicle = self.vid
+        self.stage = "boost" if self.b else "core"   # which engines are attached: boost, core, upper
+        self.fairing_on = self.cfg["fairing"] > 0
+        self.liftoff_t = None
+        self.boost_end = None
+        self.core_depleted = False
+        self.payload = params["payload_kg"]
+        self.r_p_target = EARTH_RADIUS + params["perigee_km"] * 1e3
+        self.r_a_target = EARTH_RADIUS + params["apogee_km"] * 1e3
+        self.inc_target = params["inclination_deg"]
+        self.phase_keys = [k for k, _ in phases_for(self.cfg)]
+        # What the vehicle craft is made of, for the viewer's model tag.
+        self.parts = ((["boosters"] if self.b else []) + ["core", "upper"]
+                      + (["fairing"] if self.fairing_on else []) + ["payload"])
+
+    # -- sim plumbing ---------------------------------------------------------
 
     def craft(self, sc_id=None):
         sc = self.sim.get_spacecraft(sc_id or self.vehicle, relative_to="earth")
@@ -794,12 +812,6 @@ class MeoMission:
             self._safe_cut()
             self.log(f"Autopilot error: {type(e).__name__}: {e}", "error")
             self.status.finish("failed", f"Autopilot error: {e}", self._partial_result())
-
-    def _safe_cut(self):
-        try:
-            self.cut()
-        except Exception:
-            pass
 
     def _partial_result(self):
         try:
