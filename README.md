@@ -225,9 +225,13 @@ The page uses Three.js r160, stored in `viz/vendor/three/` (MIT licence), so it 
 offline.
 * Everything is true scale. Each object also gets a fixed-size marker and label, and clicking
   a marker or a name in the panel focuses on it.
-* Controls: drag to orbit the focused object. The mouse wheel or `+`/`-` zooms in proportion to
-  altitude, so you can zoom from AU scale down to a few metres above a surface. `F` resets the
-  view.
+* **Controls:**
+  * **Rotating:** drag to rotate around the focused object freely, in any direction, over the
+    poles and beyond (three.js `TrackballControls`). That can leave the horizon tilted; `L`
+    levels it again, putting the body's north pole or the craft's local vertical back up.
+  * **Zooming:** the mouse wheel or `+`/`-` zooms in proportion to altitude, so you can zoom
+    from AU scale down to a few metres above a surface.
+  * **Resetting:** `F` resets the view.
 * Bodies are drawn as exact ray-traced spheres, lit by the Sun, with a lat/lon grid that adds
   finer lines as you zoom in. The prime meridian and equator are highlighted.
 * Earth is drawn with a map of its geography, sampled in the rotating body frame, so

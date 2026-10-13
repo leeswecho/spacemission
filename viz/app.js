@@ -8,7 +8,7 @@
 // * Everything is true scale; HTML markers keep small objects findable.
 
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/OrbitControls.js';
+import { TrackballControls } from 'three/addons/TrackballControls.js';
 import { BodyGrid } from './bodygrid.js';
 import { buildCraftModel, disposeModel } from './models.js';
 import { EclipticOverlay } from './ecliptic.js';
@@ -519,16 +519,37 @@ function updateRelativePositions() {
 // Focus and camera
 // ---------------------------------------------------------------------------
 
+// Free (trackball) rotation: drag in any direction, over the poles and beyond.  The
+// horizon can end up tilted; L levels it again around the focus's "up" direction.
 function makeControls() {
   if (controls) controls.dispose();
-  controls = new OrbitControls(camera, renderer.domElement);
+  controls = new TrackballControls(camera, renderer.domElement);
   controls.target.set(0, 0, 0);
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.12;
-  controls.enablePan = false;
-  controls.enableZoom = false;   // custom altitude-proportional zoom below
-  controls.rotateSpeed = 0.6;
+  controls.noPan = true;
+  controls.noZoom = true;        // custom altitude-proportional zoom below
+  controls.rotateSpeed = 3.0;
+  controls.dynamicDampingFactor = 0.15;
+  controls.keys = [null, null, null];  // no A/S/D mode keys: the viewer has its own
   controls.update();
+}
+
+// "Up" for the focused object: a body's north pole, or straight away from the body a
+// craft is nearest to.
+function focusUp(o) {
+  if (o.kind === 'body') return o.id === 'sun' ? new THREE.Vector3(0, 0, 1) : o.pole.clone();
+  const nb = objects.get(o.data.nearest_body.id);
+  return o.rel.clone().sub(nb.rel).normalize();
+}
+
+// Turn the camera about its line of sight so "up" points up again.
+function levelView() {
+  const o = objects.get(focusId);
+  if (!o || !controls) return;
+  const up = focusUp(o);
+  const eye = camera.position.clone().sub(controls.target).normalize();
+  if (Math.abs(eye.dot(up)) > 0.999) return;  // looking straight down the axis: nothing to level
+  camera.up.copy(up);
+  camera.lookAt(controls.target);
 }
 
 function sunDirectionFrom(o) {
@@ -543,17 +564,15 @@ function setFocus(id, distanceKm) {
   focusId = id;
   updateRelativePositions();
 
-  let up = new THREE.Vector3(0, 0, 1);
+  const up = focusUp(o);
   let dir;
   let dist;
   if (o.kind === 'body') {
-    if (id !== 'sun') up = o.pole.clone();
     // Look at the lit hemisphere from slightly "above" the equator.
     dir = id === 'sun' ? new THREE.Vector3(1, -1, 0.6) : sunDirectionFrom(o).addScaledVector(up, 0.35);
     dist = distanceKm ?? o.radiusKm * 4;
   } else {
     const nb = objects.get(o.data.nearest_body.id);
-    up = o.rel.clone().sub(nb.rel).normalize();
     let east = new THREE.Vector3().crossVectors(nb.pole, up);
     if (east.lengthSq() < 1e-12) east = new THREE.Vector3(1, 0, 0);
     east.normalize();
@@ -593,6 +612,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key === '+' || e.key === '=') zoomBy(0.8);
   else if (e.key === '-' || e.key === '_') zoomBy(1.25);
   else if (e.key === 'f' || e.key === 'F') setFocus(focusId);
+  else if (e.key === 'l' || e.key === 'L') levelView();
   else if (e.key === 'e' || e.key === 'E') setEclipticEnabled(!ecliptic.enabled);
   else if (e.key === 'g' || e.key === 'G') setBodyGridEnabled(!bodyGrid.enabled);
   else if (e.key === 't' || e.key === 'T') setTrailsEnabled(!trails.enabled);
@@ -812,6 +832,7 @@ function resize() {
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
+    controls?.handleResize();
   }
 }
 
