@@ -241,10 +241,20 @@ offline.
   upper stage, ogive fairing (two half shells once jettisoned) and a satellite with solar
   panels, in each rocket's colours. New Glenn's first stage also has its two aft strakes
   and four fins below the interstage. The craft's `model` tag says which rocket and which parts
-  it is made of. A model points along its velocity relative to the nearest body: the
-  surface-relative velocity low down, blending to the orbital velocity between 50 and 150 km.
-  A craft at rest stands radially outward from the body. A craft without a recognised tag is
-  a sphere of its reference diameter.
+  it is made of.
+  * **Moon page vehicles:** drawn by engine type.
+    * A lander is Apollo-style, sized by the cube root of its mass against the 15 t LM:
+      gold-foil descent stage on four legs, grey ascent cabin, docking tunnel and thruster
+      quads.
+    * With Raptor or Raptor Vacuum engines, a lander is a full-size Starship HLS, and the
+      tab 2 and 4 vehicles are a plain Starship.
+    * Other vehicles are a generic tank with engine bells, and cargo left on the surface is
+      a pallet of crates.
+  * **Orientation:** while its engines fire, a model points along its thrust, with the bells
+    behind. Otherwise it points along its velocity relative to the nearest body: the
+    surface-relative velocity low down, blending to the orbital velocity between 50 and
+    150 km. A craft at rest stands radially outward from the body.
+  * **Fallback:** a craft without a recognised tag is a sphere of its reference diameter.
 * Ecliptic grid (toggle with the panel checkbox or `E`; the choice is remembered per browser):
   a polar grid in the ecliptic plane centred on the Sun. Rings at 0.1 / 1 / 10 AU appear as
   you zoom and carry AU labels. Spokes are every 30°, and the vernal-equinox direction (♈,

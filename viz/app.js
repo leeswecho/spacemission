@@ -239,9 +239,9 @@ function craftMesh(s) {
 
 const MODEL_UP = new THREE.Vector3(0, 1, 0);
 
-// Point the model along its velocity relative to the nearest body: surface-relative low down,
-// blending to the non-rotating (orbital) velocity between 50 and 150 km.  At rest it stands
-// radially outward from the body.
+// Point the model along its thrust while the engines fire; otherwise along its velocity
+// relative to the nearest body: surface-relative low down, blending to the non-rotating
+// (orbital) velocity between 50 and 150 km.  At rest it stands radially outward from the body.
 function orientCraft(o, state) {
   const s = o.data;
   const nb = s.nearest_body;
@@ -252,7 +252,11 @@ function orientCraft(o, state) {
   const orbital = new THREE.Vector3(...sub(s.velocity, body.velocity));
   const w = THREE.MathUtils.smoothstep(nb.altitude, 50e3, 150e3);
   const v = surf.multiplyScalar(1 - w).addScaledVector(orbital, w);
-  const dir = v.length() > 1.0 ? v.normalize() : radial;
+  // While the engines fire, point along the thrust (bells behind it): braking burns and
+  // landings then look the way they are flown.
+  const thrust = new THREE.Vector3(...(s.acceleration?.thrust ?? [0, 0, 0]));
+  const firing = s.thrust?.active !== false && thrust.length() > 1e-4;
+  const dir = firing ? thrust.normalize() : v.length() > 1.0 ? v.normalize() : radial;
   o.mesh.quaternion.setFromUnitVectors(MODEL_UP, dir);
 }
 

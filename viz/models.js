@@ -271,11 +271,137 @@ function engineBells(group, count, thrust, d, y0) {
   return len;
 }
 
+const RAPTORS = new Set(['raptor', 'raptor_vac']);
+const LM_MASS = 15000;  // kg, an Apollo Lunar Module fully loaded: the size the lander model is drawn at
+
+// Apollo-style lunar module, true size for a 15 t lander, base (footpads) at y0.  Gold-foil
+// octagonal descent stage on four splayed legs with the engine bells beneath, and an angular
+// grey ascent cabin (front window facets toward +Z) with a docking tunnel and thruster quads.
+function apolloLander(group, tag, y0) {
+  const GREY = 0xb9bcc1;
+  const DARK = 0x4a4d52;
+  const bodyBase = y0 + 1.5;
+  const bodyH = 1.65;
+  const { len } = bellSize(tag.engine_thrust ?? 45e3);
+  engineBells(group, Math.max(1, tag.engines ?? 1), tag.engine_thrust ?? 45e3, 4.2,
+    Math.max(bodyBase, y0 + Math.min(len, 1.4) + 0.1));
+  const descent = cylinder(4.3, bodyH, FOIL, bodyBase, 8);
+  descent.rotation.y = Math.PI / 8;  // flats facing the axes
+  group.add(descent);
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+    const top = new THREE.Vector3(Math.cos(a) * 2.0, bodyBase + bodyH * 0.8, Math.sin(a) * 2.0);
+    const foot = new THREE.Vector3(Math.cos(a) * 4.5, y0 + 0.15, Math.sin(a) * 4.5);
+    const strut = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, top.distanceTo(foot), 6), material(FOIL));
+    strut.position.copy(top).add(foot).multiplyScalar(0.5);
+    strut.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), foot.clone().sub(top).normalize());
+    group.add(strut);
+    const pad = cylinder(0.94, 0.15, GREY, y0, 12);
+    pad.position.x = foot.x;
+    pad.position.z = foot.z;
+    group.add(pad);
+  }
+  const a0 = bodyBase + bodyH;  // ascent stage base
+  const cabin = new THREE.Mesh(new THREE.CylinderGeometry(1.18, 1.18, 2.0, 8), material(GREY));
+  cabin.rotation.x = Math.PI / 2;
+  cabin.position.set(0, a0 + 1.25, 0.45);
+  group.add(cabin);
+  const mid = new THREE.Mesh(new THREE.BoxGeometry(3.4, 1.9, 1.5), material(GREY));
+  mid.position.set(0, a0 + 1.05, -0.8);
+  group.add(mid);
+  const aft = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.4, 1.0), material(DARK));
+  aft.position.set(0, a0 + 1.25, -2.0);
+  group.add(aft);
+  for (const side of [-1, 1]) {  // the two triangular windows, as dark facets
+    const win = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.5, 0.05), material(0x15171a));
+    win.position.set(side * 0.45, a0 + 1.55, 1.47);
+    win.rotation.z = side * 0.35;
+    group.add(win);
+  }
+  group.add(cylinder(0.85, 0.45, GREY, a0 + 2.2, 12));  // docking tunnel
+  for (const [x, z] of [[1.75, 0.9], [-1.75, 0.9], [1.75, -1.2], [-1.75, -1.2]]) {  // thruster quads
+    const quad = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.35, 0.35), material(DARK));
+    quad.position.set(x, a0 + 1.7, z);
+    group.add(quad);
+  }
+  const mast = cylinder(0.05, 0.8, GREY, a0 + 2.0, 6);
+  mast.position.set(-0.9, 0, -1.2);
+  group.add(mast);
+  const dish = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.1, 0.2, 14), material(WHITE));
+  dish.position.set(-0.9, a0 + 2.9, -1.2);
+  group.add(dish);
+  return a0 + 2.65;
+}
+
+// Lander of the given mass (kg), scaled from a 15 t LM by the cube root of the mass ratio.
+function scaledLander(tag, mass, y0 = 0) {
+  const s = THREE.MathUtils.clamp(Math.cbrt(Math.max(1, mass) / LM_MASS), 0.45, 3.0);
+  const inner = new THREE.Group();
+  const top = apolloLander(inner, tag, 0);
+  inner.scale.setScalar(s);
+  inner.position.y = y0;
+  return { object: inner, height: top * s };
+}
+
+// Starship HLS, true size: no flaps or heat shield, white upper body with solar arrays, the
+// crew airlock band near the top with an elevator down the side, landing legs, Raptors below.
+function starshipHLS(group, tag) {
+  const D = 9.0;
+  const bells = bellSize(tag.engine_thrust ?? 2.4e6).len;
+  const base = bells + 0.6;
+  engineBells(group, Math.max(1, tag.engines ?? 6), tag.engine_thrust ?? 2.4e6, D, base);
+  group.add(cylinder(D, 26.0, STEEL, base, 32));
+  group.add(cylinder(D, 11.0, WHITE, base + 26.0, 32));
+  group.add(cylinder(D * 1.006, 4.0, PANEL, base + 27.0, 32));          // solar arrays
+  group.add(cylinder(D * 1.01, 2.2, 0x2c2f35, base + 33.5, 32));        // airlock deck
+  group.add(ogive(D, 13.3, 0, WHITE, base + 37.0));
+  const elevator = new THREE.Mesh(new THREE.BoxGeometry(1.4, 34.0, 0.5), material(0x6c7077));
+  elevator.position.set(0, base + 17.0, D / 2 + 0.3);
+  group.add(elevator);
+  for (let i = 0; i < 8; i++) {  // landing thrusters, high on the body
+    const a = (i / 8) * Math.PI * 2;
+    const t = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.2, 0.7), material(0x3a3c40));
+    t.position.set(Math.cos(a) * (D / 2 + 0.2), base + 31.0, Math.sin(a) * (D / 2 + 0.2));
+    group.add(t);
+  }
+  for (let i = 0; i < 6; i++) {  // landing legs
+    const a = (i / 6) * Math.PI * 2 + Math.PI / 6;
+    const top = new THREE.Vector3(Math.cos(a) * D / 2, base + 5.0, Math.sin(a) * D / 2);
+    const foot = new THREE.Vector3(Math.cos(a) * (D / 2 + 2.2), 0.2, Math.sin(a) * (D / 2 + 2.2));
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.3, top.distanceTo(foot), 8), material(STEEL));
+    leg.position.copy(top).add(foot).multiplyScalar(0.5);
+    leg.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), foot.clone().sub(top).normalize());
+    group.add(leg);
+    const pad = cylinder(1.6, 0.25, STEEL, 0, 12);
+    pad.position.x = foot.x;
+    pad.position.z = foot.z;
+    group.add(pad);
+  }
+  return base + 50.3;
+}
+
+// A plain Starship (tabs 2 and 4 with Raptors): the Starship upper stage over its own engines.
+function starshipShip(group, tag) {
+  const bells = bellSize(tag.engine_thrust ?? 2.4e6).len;
+  engineBells(group, Math.max(1, tag.engines ?? 6), tag.engine_thrust ?? 2.4e6, 9.0, bells);
+  return upperStage(VEHICLES.starship, group, bells, false);
+}
+
 function lunarVehicle(tag) {
   const parts = new Set(tag.parts);
   const prop = Math.max(0, tag.prop ?? 0);
   const dry = Math.max(0, tag.dry ?? 0);
   const group = new THREE.Group();
+  const raptor = RAPTORS.has(tag.engine);
+  if (!parts.has('cargo') && parts.has('engines') && raptor) {
+    const top = parts.has('lander') ? starshipHLS(group, tag) : starshipShip(group, tag);
+    return { object: group, length: top };
+  }
+  if (parts.has('lander') && !parts.has('tanks')) {
+    const { object, height } = scaledLander(tag, dry + prop);
+    group.add(object);
+    return { object: group, length: height };
+  }
   if (parts.has('cargo')) {  // crates on a pallet
     const n = THREE.MathUtils.clamp(Math.ceil((dry + prop) / 1500), 1, 9);
     const side = Math.ceil(Math.sqrt(n));
@@ -287,42 +413,26 @@ function lunarVehicle(tag) {
     }
     return { object: group, length: 1.4 };
   }
-  const volume = prop / 800 + dry / 400 + 2;  // m^3
+  // Generic tank stack.  Before the lander separates (tanks + lander), the tanks hold what
+  // stays in orbit and the lander rides on top with the engines.
+  const stack = parts.has('lander') && parts.has('tanks');
+  const lDry = stack ? Math.max(0, tag.lander_dry ?? 0) : 0;
+  const lProp = stack ? Math.max(0, tag.lander_prop ?? 0) : 0;
+  const volume = (prop - lProp) / 800 + (dry - lDry) / 400 + 2;  // m^3
   const d = THREE.MathUtils.clamp(Math.cbrt(volume / 1.2), 2.2, 9);
   const l = Math.max(1.5, volume / (Math.PI * d * d / 4));
-  const lander = parts.has('lander');
   let base = 0;
-  if (parts.has('engines') && tag.engines > 0) {
+  if (!stack && parts.has('engines') && tag.engines > 0) {
     base = bellSize(tag.engine_thrust ?? 1e5).len;
     engineBells(group, tag.engines, tag.engine_thrust ?? 1e5, d, base);
-  }
-  if (lander && !parts.has('tanks')) {
-    // Body on legs: four struts splayed out to footpads level with the engine exits.
-    const body = cylinder(d, l, FOIL, base, 8);
-    group.add(body);
-    for (let i = 0; i < 4; i++) {
-      const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
-      const top = new THREE.Vector3(Math.cos(a) * d * 0.45, base + l * 0.4, Math.sin(a) * d * 0.45);
-      const foot = new THREE.Vector3(Math.cos(a) * (d * 0.5 + 1.2), 0, Math.sin(a) * (d * 0.5 + 1.2));
-      const len = top.distanceTo(foot);
-      const strut = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, len, 6), material(WHITE));
-      strut.position.copy(top).add(foot).multiplyScalar(0.5);
-      strut.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), foot.clone().sub(top).normalize());
-      group.add(strut);
-      const pad = cylinder(0.6, 0.08, WHITE, 0, 10);
-      pad.position.x = foot.x;
-      pad.position.z = foot.z;
-      group.add(pad);
-    }
-    return { object: group, length: base + l };
   }
   group.add(cylinder(d, l, parts.has('tanks') ? WHITE : FOIL, base, 24));
   group.add(cylinder(d * 1.01, 0.4, FOIL, base + l * 0.5 - 0.2, 24));
   let top = base + l;
-  if (lander && parts.has('tanks')) {  // the lander rides on top of the stack
-    const ld = Math.min(d, 4.0);
-    group.add(cylinder(ld, ld * 0.8, FOIL, top, 8));
-    top += ld * 0.8;
+  if (stack) {
+    const lm = scaledLander(tag, lDry + lProp, top);
+    group.add(lm.object);
+    top += lm.height;
   }
   return { object: group, length: top };
 }

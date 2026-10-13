@@ -542,7 +542,7 @@ class LunarFlight(SimFlight):
 
     def add_vehicle(self, sc_id, dry, prop, body, r, v, parts, extra=None):
         model = {"vehicle": "lunar", "parts": parts, "engines": self.e["count"] if "engines" in parts else 0,
-                 "engine_thrust": self.e["thrust"], "dry": round(dry), "prop": round(prop)}
+                 "engine": self.e["key"], "engine_thrust": self.e["thrust"], "dry": round(dry), "prop": round(prop)}
         if extra:
             model.update(extra)
         self.sim.add_spacecraft({
@@ -1058,7 +1058,8 @@ class LandingMission(LunarFlight):
         self.has_orbiter = self.o_dry + self.o_prop > 0
         if self.has_orbiter:
             self.add_vehicle(self.STACK, p["payload_kg"], p["propellant_kg"], "luna", r, v,
-                             ["tanks", "lander", "engines"], {"lander_dry": round(self.l_dry)})
+                             ["tanks", "lander", "engines"],
+                             {"lander_dry": round(self.l_dry), "lander_prop": round(self.l_prop)})
             self.vehicle = self.STACK
         else:  # the whole vehicle is the lander
             self.add_vehicle(self.LANDER, self.l_dry, self.l_prop, "luna", r, v, ["lander", "engines"])
@@ -1084,7 +1085,7 @@ class LandingMission(LunarFlight):
             {"id": self.LANDER, "mass": self.l_dry + self.l_prop, "dry_mass": self.l_dry,
              "delta_v": list(-0.2 * unit(v)),
              "model": {"vehicle": "lunar", "parts": ["lander", "engines"],
-                       "engines": self.e["count"], "engine_thrust": self.e["thrust"],
+                       "engines": self.e["count"], "engine": self.e["key"], "engine_thrust": self.e["thrust"],
                        "dry": round(self.l_dry), "prop": round(self.l_prop)}},
         ], frame="inertial")
         self.vehicle = self.LANDER
