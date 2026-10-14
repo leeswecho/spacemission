@@ -418,14 +418,14 @@ Examples: LEO, TLI, Isp, Δv, LC-39A, BE-4, LH2, perigee.
 * **Left alone:** buttons, form fields, dropdown options and the live telemetry tiles.
 
 Options: `--sim <endpoint>`, `--host`, `--port` (8081), `--timeout` (ms), `--viewer-url`,
-`--other-mission` (the Moon page's `/api/mission`, default `http://127.0.0.1:8082/api/mission`).
+`--other-mission` (the Moon page's `/api/mission`, default `http://127.0.0.1:8000/api/mission`).
 The two mission pages share one simulation, so neither launches while the other has a mission
 in flight.
 
 ## Mission page: Moon mission in four parts
 
 ```
-python moon_mission_server.py               # -> open http://127.0.0.1:8082/
+python moon_mission_server.py               # -> open http://127.0.0.1:8000/
 ```
 
 For design iteration, a lunar mission is split into four parts that are flown independently,
@@ -506,7 +506,7 @@ Limitations:
 * There is no rendezvous or docking.
 * Burns stay at full thrust apart from landing; there are no crew acceleration limits.
 
-Options: `--sim <endpoint>`, `--host`, `--port` (8082), `--timeout` (ms), `--viewer-url`,
+Options: `--sim <endpoint>`, `--host`, `--port` (8000), `--timeout` (ms), `--viewer-url`,
 `--other-mission` (default `http://127.0.0.1:8081/api/mission`).
 
 ## Mission order log

@@ -11,8 +11,8 @@ flies that part server-side through ordinary simulation commands, and the
 page shows its progress and what was delivered.  One mission runs at a time;
 every open page sees the same mission.
 
-Run:  python moon_mission_server.py [--sim tcp://127.0.0.1:5555] [--port 8082]
-Then open http://127.0.0.1:8082/
+Run:  python moon_mission_server.py [--sim tcp://127.0.0.1:5555] [--port 8000]
+Then open http://127.0.0.1:8000/
 """
 
 import argparse
@@ -205,7 +205,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Serve the Moon mission page.")
     parser.add_argument("--sim", default=DEFAULT_ENDPOINT, help=f"simulation endpoint (default {DEFAULT_ENDPOINT})")
     parser.add_argument("--host", default="127.0.0.1", help="HTTP bind address (default 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=8082, help="HTTP port (default 8082)")
+    parser.add_argument("--port", type=int, default=8000, help="HTTP port (default 8000)")
     parser.add_argument("--timeout", type=int, default=120000, help="simulation reply timeout in ms (default 120000)")
     parser.add_argument("--viewer-url", default=None,
                         help="URL of the 3D viewer to link to (default: same host, port 8080)")
