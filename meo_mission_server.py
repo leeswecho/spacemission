@@ -236,7 +236,7 @@ def main(argv=None):
     parser.add_argument("--timeout", type=int, default=120000, help="simulation reply timeout in ms (default 120000)")
     parser.add_argument("--viewer-url", default=None,
                         help="URL of the 3D viewer to link to (default: same host, port 8080)")
-    parser.add_argument("--other-mission", default="http://127.0.0.1:8000/api/mission",
+    parser.add_argument("--other-mission", default="http://127.0.0.1:80/api/mission",
                         help="mission status URL of the Moon page sharing the simulation ('' for none)")
     parser.add_argument("--log-dir", default=None,
                         help="folder for the order log: one JSON file per launch press (default: no log)")
