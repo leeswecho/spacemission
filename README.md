@@ -219,7 +219,9 @@ the latest state at `/api/state` plus the static page in `viz/`. It never steps 
 so any controller can drive the sim while the page updates live. Options: `--sim <endpoint>`,
 `--host`, `--port` (8080), `--rate` (polls/s), `--timeout` (ms). If the sim stops responding,
 the page keeps showing the last state and marks it as stale. The page polls every 200 ms
-(about 5 updates per second).
+(about 5 updates per second), waiting for each reply before the next poll. The server keeps
+connections open between polls (HTTP/1.1), which saves a network round trip per poll, and closes
+a connection after 30 s idle.
 
 The page uses Three.js r160, stored in `viz/vendor/three/` (MIT licence), so it works
 offline.

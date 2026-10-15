@@ -135,6 +135,12 @@ class Handler(SimpleHTTPRequestHandler):
     extensions_map = {**SimpleHTTPRequestHandler.extensions_map,
                       ".js": "text/javascript", ".mjs": "text/javascript", ".svg": "image/svg+xml"}
 
+    # Keep connections open between polls, saving a network round trip per request; every
+    # response must therefore carry a Content-Length. An idle connection (a browser that went
+    # away, a sleeping laptop) is closed after `timeout` seconds so its thread doesn't linger.
+    protocol_version = "HTTP/1.1"
+    timeout = 30
+
     def __init__(self, *args, poller=None, **kwargs):
         self.poller = poller
         super().__init__(*args, directory=str(VIZ_DIR), **kwargs)
