@@ -138,8 +138,11 @@ class Handler(SimpleHTTPRequestHandler):
     # Keep connections open between polls, saving a network round trip per request; every
     # response must therefore carry a Content-Length. An idle connection (a browser that went
     # away, a sleeping laptop) is closed after `timeout` seconds so its thread doesn't linger.
+    # Headers and body go out in separate writes; with Nagle's algorithm on, a kept-open
+    # connection holds the body back until the headers are acknowledged (an extra round trip).
     protocol_version = "HTTP/1.1"
     timeout = 30
+    disable_nagle_algorithm = True
 
     def __init__(self, *args, poller=None, **kwargs):
         self.poller = poller
